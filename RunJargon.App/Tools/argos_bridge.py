@@ -86,6 +86,7 @@ def get_translation(from_language: str, to_language: str):
 def process_request(payload: dict) -> dict:
     mode = payload.get("Mode", "translate")
     text = payload.get("Text", "")
+    texts = payload.get("Texts", [])
     from_language = payload.get("FromLanguage", "en")
     to_language = payload.get("ToLanguage", "ru")
 
@@ -96,6 +97,20 @@ def process_request(payload: dict) -> dict:
         return {
             "TranslatedText": "",
             "Note": "Argos warmup completed."
+        }
+
+    if mode == "translate_batch":
+        if not isinstance(texts, list):
+            raise ValueError("Texts must be an array for translate_batch.")
+
+        translated_texts = []
+        for item in texts:
+            value = "" if item is None else str(item)
+            translated_texts.append("" if not value.strip() else translation.translate(value))
+
+        return {
+            "TranslatedTexts": translated_texts,
+            "Note": "Пакетный перевод выполнен локально через Argos Translate."
         }
 
     if not text.strip():

@@ -6,7 +6,7 @@ using RunJargon.App.Models;
 
 namespace RunJargon.App.Services;
 
-public sealed class LocalArgosTranslationService : ITranslationService, IWarmableTranslationService, IDisposable
+public sealed class LocalArgosTranslationService : ITranslationService, IBatchTranslationService, IWarmableTranslationService, IDisposable
 {
     private readonly string _pythonExecutable;
     private readonly string _scriptPath;
@@ -42,11 +42,38 @@ public sealed class LocalArgosTranslationService : ITranslationService, IWarmabl
                 NormalizeTargetLanguage(targetLanguage) ?? "ru"),
             cancellationToken);
 
-        var note = string.IsNullOrWhiteSpace(result.Note)
-            ? "Перевод выполнен офлайн на локальной машине."
-            : result.Note;
+        return CreateTranslationResponse(result.TranslatedText ?? string.Empty, result.Note);
+    }
 
-        return new TranslationResponse(result.TranslatedText ?? string.Empty, DisplayName, note);
+    public async Task<IReadOnlyList<TranslationResponse>> TranslateBatchAsync(
+        IReadOnlyList<string> texts,
+        string? sourceLanguage,
+        string targetLanguage,
+        CancellationToken cancellationToken)
+    {
+        if (texts.Count == 0)
+        {
+            return Array.Empty<TranslationResponse>();
+        }
+
+        var result = await SendRequestAsync(
+            new ArgosBridgeRequest(
+                "translate_batch",
+                string.Empty,
+                NormalizeSourceLanguage(sourceLanguage) ?? "en",
+                NormalizeTargetLanguage(targetLanguage) ?? "ru",
+                texts.ToList()),
+            cancellationToken);
+
+        var translatedTexts = result.TranslatedTexts ?? [];
+        var responses = new List<TranslationResponse>(texts.Count);
+        for (var index = 0; index < texts.Count; index++)
+        {
+            var translatedText = index < translatedTexts.Count ? translatedTexts[index] ?? string.Empty : string.Empty;
+            responses.Add(CreateTranslationResponse(translatedText, result.Note));
+        }
+
+        return responses;
     }
 
     public async Task WarmUpAsync(CancellationToken cancellationToken)
@@ -304,7 +331,25 @@ public sealed class LocalArgosTranslationService : ITranslationService, IWarmabl
         _bridgeProcess = null;
     }
 
-    private sealed record ArgosBridgeRequest(string Mode, string Text, string FromLanguage, string ToLanguage);
+    private TranslationResponse CreateTranslationResponse(string translatedText, string? note)
+    {
+        var responseNote = string.IsNullOrWhiteSpace(note)
+            ? "Перевод выполнен офлайн на локальной машине."
+            : note;
 
-    private sealed record ArgosBridgeResponse(string? TranslatedText, string? Note, string? Error);
+        return new TranslationResponse(translatedText, DisplayName, responseNote);
+    }
+
+    private sealed record ArgosBridgeRequest(
+        string Mode,
+        string Text,
+        string FromLanguage,
+        string ToLanguage,
+        List<string>? Texts = null);
+
+    private sealed record ArgosBridgeResponse(
+        string? TranslatedText,
+        List<string>? TranslatedTexts,
+        string? Note,
+        string? Error);
 }

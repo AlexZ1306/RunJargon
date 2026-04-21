@@ -2,7 +2,7 @@ using RunJargon.App.Models;
 
 namespace RunJargon.App.Services;
 
-public sealed class DemoTranslationService : ITranslationService
+public sealed class DemoTranslationService : ITranslationService, IBatchTranslationService
 {
     public string DisplayName => "Demo translator";
 
@@ -24,5 +24,21 @@ public sealed class DemoTranslationService : ITranslationService
                 preview,
                 DisplayName,
                 "Реальный API еще не подключен, поэтому сейчас выводится безопасный fallback для проверки UX."));
+    }
+
+    public Task<IReadOnlyList<TranslationResponse>> TranslateBatchAsync(
+        IReadOnlyList<string> texts,
+        string? sourceLanguage,
+        string targetLanguage,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<TranslationResponse> responses = texts
+            .Select(text => new TranslationResponse(
+                string.IsNullOrWhiteSpace(text) ? string.Empty : $"[fallback] {text}",
+                DisplayName,
+                "Реальный API еще не подключен, поэтому сейчас выводится безопасный fallback для проверки UX."))
+            .ToArray();
+
+        return Task.FromResult(responses);
     }
 }

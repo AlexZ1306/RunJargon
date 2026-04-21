@@ -443,7 +443,6 @@ public partial class MainWindow : Window
         CancellationToken cancellationToken)
     {
         var overlayLines = new List<TranslatedOcrLine>();
-        var cache = new Dictionary<string, string>(StringComparer.Ordinal);
         var ocrSegments = _layoutSegmentationService.BuildSegments(ocrResult.Lines);
         var automationSegments = _uiAutomationAssistPolicyService.ShouldUseUiAutomation(ocrSegments)
             ? _uiAutomationTextService.GetSegments(captureRegion)
@@ -458,6 +457,11 @@ public partial class MainWindow : Window
             visuallyRefinedSegments,
             snapshotBitmap,
             preferredOcrLanguageTag,
+            cancellationToken);
+        var cache = await PretranslatePlainSourceTextsAsync(
+            segments,
+            sourceLanguage,
+            targetLanguage,
             cancellationToken);
 
         foreach (var segment in segments)
@@ -1346,6 +1350,71 @@ public partial class MainWindow : Window
                 cancellationToken)).TranslatedText;
 
         return PostProcessTranslatedText(sourceText, translatedText);
+    }
+
+    private async Task<Dictionary<string, string>> PretranslatePlainSourceTextsAsync(
+        IReadOnlyList<LayoutTextSegment> segments,
+        string? sourceLanguage,
+        string targetLanguage,
+        CancellationToken cancellationToken)
+    {
+        var translatedBySource = new Dictionary<string, string>(StringComparer.Ordinal);
+        var pendingByLanguage = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        foreach (var segment in segments)
+        {
+            var sourceText = TextRegionIntelligence.NormalizeWhitespace(segment.Text);
+            if (string.IsNullOrWhiteSpace(sourceText) || translatedBySource.ContainsKey(sourceText))
+            {
+                continue;
+            }
+
+            if (TryTranslateCommonUiLabel(sourceText, out var commonUiTranslation))
+            {
+                translatedBySource[sourceText] = ApplySourceStyle(sourceText, commonUiTranslation);
+                continue;
+            }
+
+            var effectiveSourceLanguage = ResolveSourceLanguage(sourceLanguage, sourceText);
+            if (string.Equals(effectiveSourceLanguage, targetLanguage, StringComparison.OrdinalIgnoreCase))
+            {
+                translatedBySource[sourceText] = ApplySourceStyle(sourceText, sourceText);
+                continue;
+            }
+
+            var languageKey = effectiveSourceLanguage ?? string.Empty;
+            if (!pendingByLanguage.TryGetValue(languageKey, out var texts))
+            {
+                texts = [];
+                pendingByLanguage[languageKey] = texts;
+            }
+
+            texts.Add(sourceText);
+        }
+
+        foreach (var pendingGroup in pendingByLanguage)
+        {
+            var effectiveSourceLanguage = string.IsNullOrWhiteSpace(pendingGroup.Key)
+                ? null
+                : pendingGroup.Key;
+            var responses = await TranslationBatchCoordinator.TranslateAsync(
+                _translationService,
+                pendingGroup.Value,
+                effectiveSourceLanguage,
+                targetLanguage,
+                cancellationToken);
+
+            for (var index = 0; index < pendingGroup.Value.Count; index++)
+            {
+                var sourceText = pendingGroup.Value[index];
+                var translatedText = index < responses.Count
+                    ? responses[index].TranslatedText
+                    : string.Empty;
+                translatedBySource[sourceText] = PostProcessTranslatedText(sourceText, translatedText);
+            }
+        }
+
+        return translatedBySource;
     }
 
     private async Task<TranslationResponse> TranslateWholeTextAsync(
