@@ -8,6 +8,7 @@ using System.Windows.Media;
 using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using RunJargon.App.Models;
+using RunJargon.App.Services;
 using RunJargon.App.Utilities;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 
@@ -18,6 +19,7 @@ public partial class TranslationOverlayWindow : Window
     private readonly CaptureSessionResult _sessionResult;
     private readonly Bitmap _backgroundBitmap;
     private readonly Bitmap _sourceBitmap;
+    private readonly OverlayTextStyleNormalizationService _textStyleNormalizationService = new();
 
     public TranslationOverlayWindow(CaptureSessionResult sessionResult)
     {
@@ -56,6 +58,8 @@ public partial class TranslationOverlayWindow : Window
             .OrderBy(item => item.Bounds.Top)
             .ThenBy(item => item.Bounds.Left)
             .ToList();
+        var styleCandidates = BuildStyleCandidates(orderedLines);
+        var resolvedStyles = _textStyleNormalizationService.Resolve(styleCandidates);
 
         for (var index = 0; index < orderedLines.Count; index++)
         {
@@ -85,11 +89,11 @@ public partial class TranslationOverlayWindow : Window
                 allowWrap = placement.Height > (line.Bounds.Height * 1.6);
             }
 
-            var sample = SampleBackground(line.Bounds);
+            var styleCandidate = styleCandidates[index];
+            var resolvedStyle = resolvedStyles[index];
+            var sample = styleCandidate.BackgroundColor;
             var background = CreateOverlayBackground(sample);
-            var defaultForegroundColor = TryExtractSourceTextColor(line, sample, out var extractedColor)
-                ? extractedColor
-                : ChooseForegroundColor(sample);
+            var defaultForegroundColor = ToMediaColor(resolvedStyle.LineColor);
             var foreground = new SolidColorBrush(defaultForegroundColor);
             var shadowColor = CreateShadowColor(sample);
             var fontSize = FindBestFontSize(
@@ -125,6 +129,7 @@ public partial class TranslationOverlayWindow : Window
             var textBlock = CreateTextBlock(
                 line,
                 sample,
+                resolvedStyle.LineColor,
                 foreground,
                 shadowColor,
                 fontSize,
@@ -136,6 +141,37 @@ public partial class TranslationOverlayWindow : Window
             Canvas.SetTop(border, placement.Top);
             OverlayCanvas.Children.Add(border);
         }
+    }
+
+    private List<OverlayTextStyleCandidate> BuildStyleCandidates(IReadOnlyList<TranslatedOcrLine> lines)
+    {
+        var candidates = new List<OverlayTextStyleCandidate>(lines.Count);
+
+        foreach (var line in lines)
+        {
+            var background = SampleBackground(line.Bounds);
+            var defaultForeground = ChooseForegroundDrawingColor(background);
+            OverlayTextColorSample? extractedSample = null;
+            if (ShouldUseSourceTextColor(line)
+                && TryExtractTextColorSampleFromBounds(line.Bounds, background, out var colorSample))
+            {
+                extractedSample = colorSample;
+            }
+
+            var preferredFontSize = line.PreferredFontSize > 0
+                ? line.PreferredFontSize
+                : EstimateTargetFontSize(line);
+            candidates.Add(new OverlayTextStyleCandidate(
+                line.LayoutKind,
+                line.Bounds,
+                preferredFontSize,
+                background,
+                defaultForeground,
+                extractedSample,
+                line.InlineRuns is { Count: > 0 }));
+        }
+
+        return candidates;
     }
 
     private Rect CreatePlacement(TranslatedOcrLine line, double targetFontSize, bool allowWrap)
@@ -267,6 +303,7 @@ public partial class TranslationOverlayWindow : Window
     private TextBlock CreateTextBlock(
         TranslatedOcrLine line,
         System.Drawing.Color sampledBackground,
+        System.Drawing.Color baseLineColor,
         SolidColorBrush defaultForeground,
         System.Windows.Media.Color shadowColor,
         double fontSize,
@@ -303,7 +340,7 @@ public partial class TranslationOverlayWindow : Window
         {
             var runForeground = defaultForeground;
             if (run.PreserveSourceColor
-                && TryExtractStyledRunColor(run, sampledBackground, out var runColor))
+                && TryExtractStyledRunColor(run, sampledBackground, baseLineColor, out var runColor))
             {
                 runForeground = new SolidColorBrush(runColor);
             }
@@ -324,6 +361,12 @@ public partial class TranslationOverlayWindow : Window
         return luminance < 140
             ? System.Windows.Media.Color.FromRgb(248, 250, 252)
             : System.Windows.Media.Color.FromRgb(15, 23, 42);
+    }
+
+    private static System.Drawing.Color ChooseForegroundDrawingColor(System.Drawing.Color sampled)
+    {
+        var color = ChooseForegroundColor(sampled);
+        return System.Drawing.Color.FromArgb(color.R, color.G, color.B);
     }
 
     private static System.Windows.Media.Color CreateShadowColor(System.Drawing.Color sampled)
@@ -436,23 +479,10 @@ public partial class TranslationOverlayWindow : Window
             (int)(b / count));
     }
 
-    private bool TryExtractSourceTextColor(
-        TranslatedOcrLine line,
-        System.Drawing.Color sampledBackground,
-        out System.Windows.Media.Color textColor)
-    {
-        textColor = ChooseForegroundColor(sampledBackground);
-        if (!ShouldUseSourceTextColor(line))
-        {
-            return false;
-        }
-
-        return TryExtractTextColorFromBounds(line.Bounds, sampledBackground, out textColor);
-    }
-
     private bool TryExtractStyledRunColor(
         TranslatedInlineRun run,
         System.Drawing.Color sampledBackground,
+        System.Drawing.Color baseLineColor,
         out System.Windows.Media.Color textColor)
     {
         textColor = ChooseForegroundColor(sampledBackground);
@@ -462,15 +492,26 @@ public partial class TranslationOverlayWindow : Window
         }
 
         var localBackground = SampleBackground(bounds);
-        return TryExtractTextColorFromBounds(bounds, localBackground, out textColor);
+        if (!TryExtractTextColorSampleFromBounds(bounds, localBackground, out var sample))
+        {
+            return false;
+        }
+
+        if (sample.ConfidenceScore < 0.8 || ComputeColorDistance(sample.Color, baseLineColor) < 66)
+        {
+            return false;
+        }
+
+        textColor = ToMediaColor(sample.Color);
+        return true;
     }
 
-    private bool TryExtractTextColorFromBounds(
+    private bool TryExtractTextColorSampleFromBounds(
         ScreenRegion bounds,
         System.Drawing.Color sampledBackground,
-        out System.Windows.Media.Color textColor)
+        out OverlayTextColorSample sample)
     {
-        textColor = ChooseForegroundColor(sampledBackground);
+        sample = default!;
 
         var x0 = Math.Clamp((int)Math.Floor(bounds.Left), 0, Math.Max(0, _sourceBitmap.Width - 1));
         var y0 = Math.Clamp((int)Math.Floor(bounds.Top), 0, Math.Max(0, _sourceBitmap.Height - 1));
@@ -571,7 +612,12 @@ public partial class TranslationOverlayWindow : Window
             return false;
         }
 
-        textColor = System.Windows.Media.Color.FromRgb(average.R, average.G, average.B);
+        sample = new OverlayTextColorSample(
+            average,
+            contrast,
+            changedRatio,
+            dominantRatio,
+            averageDeviation);
         return true;
     }
 
@@ -607,6 +653,11 @@ public partial class TranslationOverlayWindow : Window
         return Math.Abs(left.R - right.R)
                + Math.Abs(left.G - right.G)
                + Math.Abs(left.B - right.B);
+    }
+
+    private static System.Windows.Media.Color ToMediaColor(System.Drawing.Color color)
+    {
+        return System.Windows.Media.Color.FromRgb(color.R, color.G, color.B);
     }
 
     private static BitmapImage CreateSnapshotImage(byte[] pngBytes)
