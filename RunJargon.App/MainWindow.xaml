@@ -137,15 +137,7 @@
                                    Foreground="#64748B"
                                    Text="Язык исходного текста" />
                         <ComboBox x:Name="SourceLanguageCombo"
-                                  Margin="0,8,0,0"
-                                  SelectedIndex="0">
-                            <ComboBoxItem Tag="" Content="Автоопределение" />
-                            <ComboBoxItem Tag="en" Content="English" />
-                            <ComboBoxItem Tag="de" Content="Deutsch" />
-                            <ComboBoxItem Tag="ja" Content="Japanese" />
-                            <ComboBoxItem Tag="zh-Hans" Content="Chinese Simplified" />
-                            <ComboBoxItem Tag="ru" Content="Русский" />
-                        </ComboBox>
+                                  Margin="0,8,0,0" />
                     </StackPanel>
 
                     <StackPanel Grid.Column="1" Margin="0,0,16,0">
@@ -154,13 +146,7 @@
                                    Foreground="#64748B"
                                    Text="Язык перевода" />
                         <ComboBox x:Name="TargetLanguageCombo"
-                                  Margin="0,8,0,0"
-                                  SelectedIndex="0">
-                            <ComboBoxItem Tag="ru" Content="Русский" />
-                            <ComboBoxItem Tag="en" Content="English" />
-                            <ComboBoxItem Tag="de" Content="Deutsch" />
-                            <ComboBoxItem Tag="ja" Content="Japanese" />
-                        </ComboBox>
+                                  Margin="0,8,0,0" />
                     </StackPanel>
 
                     <Border Grid.Column="2"

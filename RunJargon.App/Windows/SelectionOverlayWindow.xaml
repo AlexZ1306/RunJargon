@@ -17,7 +17,8 @@
             MouseMove="RootCanvas_MouseMove"
             MouseLeftButtonUp="RootCanvas_MouseLeftButtonUp"
             KeyDown="RootCanvas_KeyDown">
-        <Rectangle Width="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=Window}}"
+        <Rectangle x:Name="DimOverlay"
+                   Width="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=Window}}"
                    Height="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Window}}"
                    IsHitTestVisible="False"
                    Fill="#26000000" />

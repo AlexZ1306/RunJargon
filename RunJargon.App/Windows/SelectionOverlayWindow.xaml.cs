@@ -1,8 +1,12 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
 using Forms = System.Windows.Forms;
 using RunJargon.App.Models;
+using RunJargon.App.Services;
+using RunJargon.App.Utilities;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 using Point = System.Windows.Point;
@@ -11,30 +15,198 @@ namespace RunJargon.App.Windows;
 
 public partial class SelectionOverlayWindow : Window
 {
+    private const double MinimumSelectionSize = 8;
+
+    private readonly IReadOnlyList<TranslationLanguageOption> _sourceLanguages;
+    private readonly IReadOnlyList<TranslationLanguageOption> _targetLanguages;
+    private readonly string _initialSourceLanguageCode;
+    private readonly string _initialTargetLanguageCode;
+    private readonly TaskCompletionSource<ScreenRegion?> _selectionTcs =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     private Point? _dragStart;
 
-    public SelectionOverlayWindow()
+    public SelectionOverlayWindow(
+        IReadOnlyList<TranslationLanguageOption> sourceLanguages,
+        IReadOnlyList<TranslationLanguageOption> targetLanguages,
+        string? selectedSourceLanguageCode,
+        string? selectedTargetLanguageCode,
+        string recognizedTextToCopy,
+        string translatedTextToCopy)
     {
         InitializeComponent();
+
+        _sourceLanguages = sourceLanguages;
+        _targetLanguages = targetLanguages;
+        _initialSourceLanguageCode = selectedSourceLanguageCode
+                                     ?? TranslationLanguageCatalog.GetDefaultSourceLanguage().Code;
+        _initialTargetLanguageCode = selectedTargetLanguageCode
+                                     ?? TranslationLanguageCatalog.GetDefaultTargetLanguage().Code;
 
         Left = SystemParameters.VirtualScreenLeft;
         Top = SystemParameters.VirtualScreenTop;
         Width = SystemParameters.VirtualScreenWidth;
         Height = SystemParameters.VirtualScreenHeight;
 
+        CaptureToolbar.Configure(
+            _sourceLanguages,
+            _targetLanguages,
+            _initialSourceLanguageCode,
+            _initialTargetLanguageCode,
+            recognizedTextToCopy,
+            translatedTextToCopy);
+        CaptureToolbar.SetBusy(false);
+
         Loaded += SelectionOverlayWindow_Loaded;
+        Closed += SelectionOverlayWindow_Closed;
+        CaptureToolbar.CloseRequested += CaptureToolbar_CloseRequested;
+        CaptureToolbar.LanguageSelectionChanged += CaptureToolbar_LanguageSelectionChanged;
     }
+
+    public event EventHandler? LanguageSelectionChanged;
 
     public ScreenRegion? SelectedRegion { get; private set; }
 
+    public string? SelectedSourceLanguageCode =>
+        CaptureToolbar.SelectedSourceLanguageCode ?? _initialSourceLanguageCode;
+
+    public string? SelectedTargetLanguageCode =>
+        CaptureToolbar.SelectedTargetLanguageCode ?? _initialTargetLanguageCode;
+
+    public Task<ScreenRegion?> WaitForSelectionAsync()
+    {
+        return _selectionTcs.Task;
+    }
+
+    public void SetBusy(bool isBusy)
+    {
+        if (!CheckAccess())
+        {
+            Dispatcher.Invoke(() => SetBusy(isBusy));
+            return;
+        }
+
+        CaptureToolbar.SetBusy(isBusy);
+    }
+
+    public void UpdateCopyTexts(string recognizedTextToCopy, string translatedTextToCopy)
+    {
+        if (!CheckAccess())
+        {
+            Dispatcher.Invoke(() => UpdateCopyTexts(recognizedTextToCopy, translatedTextToCopy));
+            return;
+        }
+
+        CaptureToolbar.UpdateCopyTexts(recognizedTextToCopy, translatedTextToCopy);
+    }
+
+    public async Task PrepareForCleanCaptureAsync()
+    {
+        if (!CheckAccess())
+        {
+            await Dispatcher.InvokeAsync(() => PrepareForCleanCaptureAsync()).Task.Unwrap();
+            return;
+        }
+
+        if (!IsLoaded || !IsVisible)
+        {
+            return;
+        }
+
+        DimOverlay.Visibility = Visibility.Collapsed;
+        SelectionBorder.Visibility = Visibility.Collapsed;
+        CaptureToolbar.Visibility = Visibility.Visible;
+        RootCanvas.IsHitTestVisible = true;
+        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+        await Task.Delay(20);
+    }
+
+    public void ShowToolbarOnly(bool isBusy)
+    {
+        if (!CheckAccess())
+        {
+            Dispatcher.Invoke(() => ShowToolbarOnly(isBusy));
+            return;
+        }
+
+        if (SelectedRegion is null)
+        {
+            return;
+        }
+
+        var region = SelectedRegion.Value;
+        var screenBounds = Forms.Screen.FromRectangle(
+            new System.Drawing.Rectangle(
+                (int)Math.Floor(region.Left),
+                (int)Math.Floor(region.Top),
+                Math.Max(1, (int)Math.Ceiling(region.Width)),
+                Math.Max(1, (int)Math.Ceiling(region.Height)))).Bounds;
+
+        var toolbarWidth = CaptureToolbar.Width > 0 ? CaptureToolbar.Width : 617d;
+        var toolbarHeight = CaptureToolbar.Height > 0 ? CaptureToolbar.Height : 46d;
+
+        Left = screenBounds.Left + Math.Max(0, (screenBounds.Width - toolbarWidth) / 2d);
+        Top = screenBounds.Top;
+        Width = toolbarWidth;
+        Height = toolbarHeight;
+        Cursor = System.Windows.Input.Cursors.Arrow;
+
+        RootCanvas.Width = toolbarWidth;
+        RootCanvas.Height = toolbarHeight;
+        RootCanvas.Focusable = true;
+        RootCanvas.IsHitTestVisible = true;
+
+        DimOverlay.Visibility = Visibility.Collapsed;
+        SelectionBorder.Visibility = Visibility.Collapsed;
+        CaptureToolbar.Visibility = Visibility.Visible;
+        Canvas.SetLeft(CaptureToolbar, 0);
+        Canvas.SetTop(CaptureToolbar, 0);
+        CaptureToolbar.SetBusy(isBusy);
+
+        if (!IsVisible)
+        {
+            Show();
+        }
+
+        Activate();
+        RootCanvas.Focus();
+    }
+
     private void SelectionOverlayWindow_Loaded(object sender, RoutedEventArgs e)
     {
+        WindowCaptureProtection.TryExcludeFromCapture(this);
         RootCanvas.Focus();
         PositionCaptureToolbar();
     }
 
+    private void SelectionOverlayWindow_Closed(object? sender, EventArgs e)
+    {
+        Mouse.Capture(null);
+        CaptureToolbar.CloseRequested -= CaptureToolbar_CloseRequested;
+        CaptureToolbar.LanguageSelectionChanged -= CaptureToolbar_LanguageSelectionChanged;
+        _selectionTcs.TrySetResult(null);
+    }
+
+    private void CaptureToolbar_CloseRequested(object? sender, EventArgs e)
+    {
+        _selectionTcs.TrySetResult(null);
+        Close();
+    }
+
+    private void CaptureToolbar_LanguageSelectionChanged(object? sender, EventArgs e)
+    {
+        LanguageSelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     private void RootCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        if (_selectionTcs.Task.IsCompleted
+            || IsToolbarInteraction(e.OriginalSource as DependencyObject))
+        {
+            return;
+        }
+
+        Cursor = System.Windows.Input.Cursors.Cross;
         _dragStart = e.GetPosition(RootCanvas);
         SelectionBorder.Visibility = Visibility.Visible;
         Mouse.Capture(RootCanvas);
@@ -68,22 +240,26 @@ public partial class SelectionOverlayWindow : Window
 
         _dragStart = null;
 
-        if (width < 8 || height < 8)
+        if (width < MinimumSelectionSize || height < MinimumSelectionSize)
         {
-            DialogResult = false;
+            SelectionBorder.Visibility = Visibility.Collapsed;
             return;
         }
 
         SelectedRegion = new ScreenRegion(Left + left, Top + top, width, height);
-        DialogResult = true;
+        _selectionTcs.TrySetResult(SelectedRegion);
+        ShowToolbarOnly(isBusy: true);
     }
 
     private void RootCanvas_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Escape)
+        if (e.Key != Key.Escape)
         {
-            DialogResult = false;
+            return;
         }
+
+        _selectionTcs.TrySetResult(null);
+        Close();
     }
 
     private void UpdateSelection(Point current)
@@ -106,7 +282,7 @@ public partial class SelectionOverlayWindow : Window
 
     private void PositionCaptureToolbar()
     {
-        var toolbarWidth = CaptureToolbar.Width > 0 ? CaptureToolbar.Width : 569d;
+        var toolbarWidth = CaptureToolbar.Width > 0 ? CaptureToolbar.Width : 617d;
         var screen = Forms.Screen.FromPoint(Forms.Cursor.Position);
         var relativeScreenLeft = screen.Bounds.Left - Left;
         var relativeScreenTop = screen.Bounds.Top - Top;
@@ -114,5 +290,20 @@ public partial class SelectionOverlayWindow : Window
 
         Canvas.SetLeft(CaptureToolbar, left);
         Canvas.SetTop(CaptureToolbar, Math.Max(0, relativeScreenTop));
+    }
+
+    private bool IsToolbarInteraction(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (ReferenceEquals(source, CaptureToolbar))
+            {
+                return true;
+            }
+
+            source = VisualTreeHelper.GetParent(source);
+        }
+
+        return false;
     }
 }

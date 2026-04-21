@@ -32,7 +32,10 @@ public partial class MainWindow : Window
     private TrayIconService? _trayIconService;
     private TranslationResultWindow? _translationResultWindow;
     private TranslationOverlayWindow? _translationOverlayWindow;
+    private SelectionOverlayWindow? _selectionOverlayWindow;
     private ScreenRegion? _lastCapturedRegion;
+    private string _lastRecognizedTextForCopy = string.Empty;
+    private string _lastTranslatedTextForCopy = string.Empty;
     private bool _allowAppExit;
     private bool _hasShownTrayHint;
     private bool _isBusy;
@@ -50,6 +53,7 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         RepeatLastAreaButton.IsEnabled = false;
+        LoadLanguageSelectorsIntoUi();
         LoadTranslatorSettingsIntoUi();
         RefreshTranslatorPresentation();
 
@@ -88,6 +92,7 @@ public partial class MainWindow : Window
         }
 
         _hotKeyService?.Dispose();
+        CloseSelectionOverlay();
         _translationOverlayWindow?.Close();
         _translationResultWindow?.Close();
         DisposeTranslationService();
@@ -143,20 +148,33 @@ public partial class MainWindow : Window
             _lastCapturedRegion = region;
             RepeatLastAreaButton.IsEnabled = true;
 
-            await WaitForWindowsToDisappearAsync();
+            ClearDisplayedTexts();
+            _lastRecognizedTextForCopy = string.Empty;
+            _lastTranslatedTextForCopy = string.Empty;
+            _selectionOverlayWindow?.UpdateCopyTexts(string.Empty, string.Empty);
+            if (_selectionOverlayWindow is not null)
+            {
+                await _selectionOverlayWindow.PrepareForCleanCaptureAsync();
+            }
 
             SetStatus("Делаю снимок выделенной области...");
             using var bitmap = _screenCaptureService.Capture(region.Value);
             var snapshotPngBytes = EncodeSnapshotPng(bitmap);
+            _selectionOverlayWindow?.ShowToolbarOnly(isBusy: true);
 
             SetStatus("Распознаю текст локально через Windows OCR...");
             var ocrResult = await _ocrService.RecognizeAsync(
                 bitmap,
                 GetPreferredOcrLanguageTag(),
                 CancellationToken.None);
-            RecognizedTextBox.Text = string.IsNullOrWhiteSpace(ocrResult.Text)
+            var recognizedTextForDisplay = string.IsNullOrWhiteSpace(ocrResult.Text)
                 ? "Windows OCR не нашел текста в выделенной области."
                 : ocrResult.Text;
+            RecognizedTextBox.Text = recognizedTextForDisplay;
+            _lastRecognizedTextForCopy = string.IsNullOrWhiteSpace(ocrResult.Text)
+                ? string.Empty
+                : ocrResult.Text;
+            _selectionOverlayWindow?.UpdateCopyTexts(_lastRecognizedTextForCopy, string.Empty);
 
             var selectedSourceLanguage = GetSelectedLanguageCode(SourceLanguageCombo);
             var targetLanguage = GetSelectedLanguageCode(TargetLanguageCombo) ?? "ru";
@@ -186,6 +204,8 @@ public partial class MainWindow : Window
                 if (!string.IsNullOrWhiteSpace(overlayBuild.RecognizedPreview))
                 {
                     RecognizedTextBox.Text = overlayBuild.RecognizedPreview;
+                    _lastRecognizedTextForCopy = overlayBuild.RecognizedPreview;
+                    _selectionOverlayWindow?.UpdateCopyTexts(_lastRecognizedTextForCopy, string.Empty);
                 }
                 translationResult = overlayLines.Count > 0
                     ? BuildTranslationResponseFromOverlayLines(overlayLines)
@@ -212,6 +232,11 @@ public partial class MainWindow : Window
             TranslatedTextBox.Text = string.IsNullOrWhiteSpace(translationResult.TranslatedText)
                 ? "Перевод пока недоступен. Подключи API ключи, и тот же поток сразу станет рабочим."
                 : translationResult.TranslatedText;
+            _lastTranslatedTextForCopy = string.IsNullOrWhiteSpace(translationResult.TranslatedText)
+                ? string.Empty
+                : translationResult.TranslatedText;
+            _selectionOverlayWindow?.UpdateCopyTexts(_lastRecognizedTextForCopy, _lastTranslatedTextForCopy);
+            _selectionOverlayWindow?.SetBusy(false);
 
             ShowTranslationPresentation(sessionResult);
 
@@ -223,6 +248,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            _selectionOverlayWindow?.SetBusy(false);
             SetStatus("Во время обработки произошла ошибка.");
             if (IsVisible)
             {
@@ -254,19 +280,28 @@ public partial class MainWindow : Window
     {
         await Task.Yield();
 
-        var selector = new SelectionOverlayWindow();
+        var selector = new SelectionOverlayWindow(
+            TranslationLanguageCatalog.GetSourceLanguages(),
+            TranslationLanguageCatalog.GetTargetLanguages(),
+            GetSelectedLanguageCode(SourceLanguageCombo),
+            GetSelectedLanguageCode(TargetLanguageCombo) ?? TranslationLanguageCatalog.GetDefaultTargetLanguage().Code,
+            _lastRecognizedTextForCopy,
+            _lastTranslatedTextForCopy);
+        selector.Closed += SelectionOverlayWindow_Closed;
+        selector.LanguageSelectionChanged += SelectionOverlayWindow_LanguageSelectionChanged;
         if (IsVisible)
         {
             selector.Owner = this;
         }
 
-        var dialogResult = selector.ShowDialog();
-        if (dialogResult != true)
-        {
-            return null;
-        }
+        _selectionOverlayWindow = selector;
+        selector.Show();
 
-        return selector.SelectedRegion;
+        var region = await selector.WaitForSelectionAsync();
+        ApplyLanguageSelection(
+            selector.SelectedSourceLanguageCode,
+            selector.SelectedTargetLanguageCode);
+        return region;
     }
 
     private void ShowTranslationPresentation(CaptureSessionResult sessionResult)
@@ -308,6 +343,34 @@ public partial class MainWindow : Window
     private void TrayIconService_ExitRequested(object? sender, EventArgs e)
     {
         Dispatcher.Invoke(ExitApplicationFromTray);
+    }
+
+    private void SelectionOverlayWindow_Closed(object? sender, EventArgs e)
+    {
+        if (sender is not SelectionOverlayWindow selector)
+        {
+            return;
+        }
+
+        selector.Closed -= SelectionOverlayWindow_Closed;
+        selector.LanguageSelectionChanged -= SelectionOverlayWindow_LanguageSelectionChanged;
+
+        if (ReferenceEquals(_selectionOverlayWindow, selector))
+        {
+            _selectionOverlayWindow = null;
+        }
+    }
+
+    private void SelectionOverlayWindow_LanguageSelectionChanged(object? sender, EventArgs e)
+    {
+        if (sender is not SelectionOverlayWindow selector)
+        {
+            return;
+        }
+
+        ApplyLanguageSelection(
+            selector.SelectedSourceLanguageCode,
+            selector.SelectedTargetLanguageCode);
     }
 
     private void HideToTray(bool showBalloonTip)
@@ -385,22 +448,56 @@ public partial class MainWindow : Window
 
     private static string? GetSelectedLanguageCode(System.Windows.Controls.ComboBox comboBox)
     {
-        return (comboBox.SelectedItem as System.Windows.Controls.ComboBoxItem)?.Tag?.ToString();
+        return comboBox.SelectedItem switch
+        {
+            TranslationLanguageOption option => option.Code,
+            System.Windows.Controls.ComboBoxItem item => item.Tag?.ToString(),
+            _ => null
+        };
     }
 
     private string? GetPreferredOcrLanguageTag()
     {
-        var code = GetSelectedLanguageCode(SourceLanguageCombo);
-        return code switch
-        {
-            null or "" => null,
-            "en" => "en-US",
-            "ru" => "ru-RU",
-            "de" => "de-DE",
-            "ja" => "ja-JP",
-            "zh-Hans" => "zh-CN",
-            _ => null
-        };
+        return TranslationLanguageCatalog.ResolvePreferredOcrLanguageTag(
+            GetSelectedLanguageCode(SourceLanguageCombo));
+    }
+
+    private void LoadLanguageSelectorsIntoUi()
+    {
+        var sourceLanguages = TranslationLanguageCatalog.GetSourceLanguages();
+        var targetLanguages = TranslationLanguageCatalog.GetTargetLanguages();
+
+        SourceLanguageCombo.ItemsSource = sourceLanguages;
+        SourceLanguageCombo.DisplayMemberPath = nameof(TranslationLanguageOption.DisplayName);
+        TargetLanguageCombo.ItemsSource = targetLanguages;
+        TargetLanguageCombo.DisplayMemberPath = nameof(TranslationLanguageOption.DisplayName);
+
+        ApplyLanguageSelection(
+            TranslationLanguageCatalog.GetDefaultSourceLanguage().Code,
+            TranslationLanguageCatalog.GetDefaultTargetLanguage().Code);
+    }
+
+    private void ApplyLanguageSelection(string? sourceLanguageCode, string? targetLanguageCode)
+    {
+        SetSelectedLanguageCode(
+            SourceLanguageCombo,
+            TranslationLanguageCatalog.GetSourceLanguages(),
+            sourceLanguageCode ?? TranslationLanguageCatalog.GetDefaultSourceLanguage().Code);
+        SetSelectedLanguageCode(
+            TargetLanguageCombo,
+            TranslationLanguageCatalog.GetTargetLanguages(),
+            targetLanguageCode ?? TranslationLanguageCatalog.GetDefaultTargetLanguage().Code);
+    }
+
+    private static void SetSelectedLanguageCode(
+        System.Windows.Controls.ComboBox comboBox,
+        IReadOnlyList<TranslationLanguageOption> availableLanguages,
+        string? languageCode)
+    {
+        var effectiveCode = languageCode ?? string.Empty;
+        comboBox.SelectedItem = availableLanguages.FirstOrDefault(language =>
+                                   string.Equals(language.Code, effectiveCode, StringComparison.OrdinalIgnoreCase))
+                               ?? availableLanguages.FirstOrDefault();
     }
 
     private void LoadTranslatorSettingsIntoUi()
@@ -1779,12 +1876,36 @@ public partial class MainWindow : Window
         _translationResultWindow = null;
     }
 
+    private void CloseSelectionOverlay()
+    {
+        if (_selectionOverlayWindow is null)
+        {
+            return;
+        }
+
+        var selector = _selectionOverlayWindow;
+        _selectionOverlayWindow = null;
+
+        selector.Closed -= SelectionOverlayWindow_Closed;
+        selector.LanguageSelectionChanged -= SelectionOverlayWindow_LanguageSelectionChanged;
+
+        if (selector.IsVisible)
+        {
+            selector.Close();
+        }
+    }
+
     private async Task PrepareForFreshCaptureAsync()
     {
+        CloseSelectionOverlay();
         CloseExistingPresentation();
+        await WaitForWindowsToDisappearAsync();
+    }
+
+    private void ClearDisplayedTexts()
+    {
         RecognizedTextBox.Text = string.Empty;
         TranslatedTextBox.Text = string.Empty;
-        await WaitForWindowsToDisappearAsync();
     }
 
     private async Task WaitForWindowsToDisappearAsync()

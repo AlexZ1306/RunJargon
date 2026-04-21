@@ -12,10 +12,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="LottieSharp" Version="2.4.3" />
     <PackageReference Include="OpenCvSharp4.Windows" Version="4.13.0.20260302" />
   </ItemGroup>
 
   <ItemGroup>
+    <Resource Include="..\panel\icons8-sync-18x18.json">
+      <Link>Assets\icons8-sync-18x18.json</Link>
+    </Resource>
     <Resource Include="icon\app.ico" />
     <Content Include="icon\tray.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
