@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="RunJargon.App/RunJargon.App.csproj" />
+  <Project Path="RunJargon.App.Tests/RunJargon.App.Tests.csproj" />
+</Solution>

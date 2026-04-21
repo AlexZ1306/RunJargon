@@ -1,0 +1,23 @@
+# Build outputs
+bin/
+obj/
+
+# Visual Studio / Rider
+.vs/
+*.user
+*.suo
+*.userprefs
+
+# Test and local verification outputs
+_preview_build*/
+_release_selfcontained*/
+_verify_build*/
+_verify_test*/
+
+# NuGet / local tools
+packages/
+artifacts/
+
+# OS / misc
+Thumbs.db
+Desktop.ini
