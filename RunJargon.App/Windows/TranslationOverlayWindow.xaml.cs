@@ -19,6 +19,7 @@ public partial class TranslationOverlayWindow : Window
     private readonly CaptureSessionResult _sessionResult;
     private readonly Bitmap _backgroundBitmap;
     private readonly Bitmap _sourceBitmap;
+    private readonly OverlayBackgroundBlendPolicyService _backgroundBlendPolicyService = new();
     private readonly OverlayTextStyleNormalizationService _textStyleNormalizationService = new();
 
     public TranslationOverlayWindow(CaptureSessionResult sessionResult)
@@ -89,10 +90,11 @@ public partial class TranslationOverlayWindow : Window
                 allowWrap = placement.Height > (line.Bounds.Height * 1.6);
             }
 
+            var backgroundSample = SampleBackgroundRegion(line.Bounds);
             var styleCandidate = styleCandidates[index];
             var resolvedStyle = resolvedStyles[index];
-            var sample = styleCandidate.BackgroundColor;
-            var background = CreateOverlayBackground(sample);
+            var sample = backgroundSample.Color;
+            var background = CreateOverlayBackground(line, backgroundSample);
             var defaultForegroundColor = ToMediaColor(resolvedStyle.LineColor);
             var foreground = new SolidColorBrush(defaultForegroundColor);
             var shadowColor = CreateShadowColor(sample);
@@ -149,7 +151,7 @@ public partial class TranslationOverlayWindow : Window
 
         foreach (var line in lines)
         {
-            var background = SampleBackground(line.Bounds);
+            var background = SampleBackgroundRegion(line.Bounds).Color;
             var defaultForeground = ChooseForegroundDrawingColor(background);
             OverlayTextColorSample? extractedSample = null;
             if (ShouldUseSourceTextColor(line)
@@ -289,13 +291,13 @@ public partial class TranslationOverlayWindow : Window
         return new Rect(placement.Left, placement.Top, placement.Width, desiredHeight);
     }
 
-    private SolidColorBrush CreateOverlayBackground(System.Drawing.Color sampled)
+    private SolidColorBrush CreateOverlayBackground(TranslatedOcrLine line, BackgroundRegionSample sample)
     {
         var color = System.Windows.Media.Color.FromArgb(
-            96,
-            sampled.R,
-            sampled.G,
-            sampled.B);
+            _backgroundBlendPolicyService.ResolveOpacity(line.LayoutKind, line.SourceLineCount, sample.Deviation),
+            sample.Color.R,
+            sample.Color.G,
+            sample.Color.B);
 
         return new SolidColorBrush(color);
     }
@@ -438,7 +440,7 @@ public partial class TranslationOverlayWindow : Window
         return textBlock.DesiredSize;
     }
 
-    private System.Drawing.Color SampleBackground(ScreenRegion bounds)
+    private BackgroundRegionSample SampleBackgroundRegion(ScreenRegion bounds)
     {
         var x0 = Math.Clamp((int)Math.Floor(bounds.Left), 0, Math.Max(0, _backgroundBitmap.Width - 1));
         var y0 = Math.Clamp((int)Math.Floor(bounds.Top), 0, Math.Max(0, _backgroundBitmap.Height - 1));
@@ -447,12 +449,14 @@ public partial class TranslationOverlayWindow : Window
 
         if (x1 <= x0 || y1 <= y0)
         {
-            return System.Drawing.Color.FromArgb(245, 248, 250);
+            return new BackgroundRegionSample(System.Drawing.Color.FromArgb(245, 248, 250), 0);
         }
 
         long r = 0;
         long g = 0;
         long b = 0;
+        double luminanceSum = 0;
+        double luminanceSquaredSum = 0;
         long count = 0;
         var step = Math.Max(1, Math.Min((x1 - x0) / 18, (y1 - y0) / 4));
 
@@ -464,19 +468,32 @@ public partial class TranslationOverlayWindow : Window
                 r += pixel.R;
                 g += pixel.G;
                 b += pixel.B;
+                var luminance = (pixel.R * 0.299) + (pixel.G * 0.587) + (pixel.B * 0.114);
+                luminanceSum += luminance;
+                luminanceSquaredSum += luminance * luminance;
                 count++;
             }
         }
 
         if (count == 0)
         {
-            return System.Drawing.Color.FromArgb(245, 248, 250);
+            return new BackgroundRegionSample(System.Drawing.Color.FromArgb(245, 248, 250), 0);
         }
 
-        return System.Drawing.Color.FromArgb(
+        var meanLuminance = luminanceSum / count;
+        var variance = Math.Max(0, (luminanceSquaredSum / count) - (meanLuminance * meanLuminance));
+
+        return new BackgroundRegionSample(
+            System.Drawing.Color.FromArgb(
             (int)(r / count),
             (int)(g / count),
-            (int)(b / count));
+            (int)(b / count)),
+            Math.Sqrt(variance));
+    }
+
+    private System.Drawing.Color SampleBackground(ScreenRegion bounds)
+    {
+        return SampleBackgroundRegion(bounds).Color;
     }
 
     private bool TryExtractStyledRunColor(
@@ -659,6 +676,8 @@ public partial class TranslationOverlayWindow : Window
     {
         return System.Windows.Media.Color.FromRgb(color.R, color.G, color.B);
     }
+
+    private readonly record struct BackgroundRegionSample(System.Drawing.Color Color, double Deviation);
 
     private static BitmapImage CreateSnapshotImage(byte[] pngBytes)
     {

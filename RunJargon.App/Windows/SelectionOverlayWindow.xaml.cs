@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using Forms = System.Windows.Forms;
 using RunJargon.App.Models;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;
@@ -29,8 +30,7 @@ public partial class SelectionOverlayWindow : Window
     private void SelectionOverlayWindow_Loaded(object sender, RoutedEventArgs e)
     {
         RootCanvas.Focus();
-        Canvas.SetLeft(HintPanel, 24);
-        Canvas.SetTop(HintPanel, 24);
+        PositionCaptureToolbar();
     }
 
     private void RootCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -102,9 +102,17 @@ public partial class SelectionOverlayWindow : Window
         Canvas.SetTop(SelectionBorder, top);
         SelectionBorder.Width = width;
         SelectionBorder.Height = height;
+    }
 
-        Canvas.SetLeft(HintPanel, left);
-        Canvas.SetTop(HintPanel, Math.Max(16, top - 60));
-        HintSubText.Text = $"{(int)width} x {(int)height}";
+    private void PositionCaptureToolbar()
+    {
+        var toolbarWidth = CaptureToolbar.Width > 0 ? CaptureToolbar.Width : 569d;
+        var screen = Forms.Screen.FromPoint(Forms.Cursor.Position);
+        var relativeScreenLeft = screen.Bounds.Left - Left;
+        var relativeScreenTop = screen.Bounds.Top - Top;
+        var left = relativeScreenLeft + Math.Max(0, (screen.Bounds.Width - toolbarWidth) / 2d);
+
+        Canvas.SetLeft(CaptureToolbar, left);
+        Canvas.SetTop(CaptureToolbar, Math.Max(0, relativeScreenTop));
     }
 }

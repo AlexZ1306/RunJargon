@@ -1,0 +1,172 @@
+<UserControl x:Class="RunJargon.App.Controls.CaptureSelectionToolbar"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Width="569"
+             Height="46"
+             Focusable="False"
+             IsHitTestVisible="False"
+             SnapsToDevicePixels="True"
+             UseLayoutRounding="True">
+    <Border Width="569"
+            Height="46"
+            Background="#2C2C2C"
+            BorderBrush="#444444"
+            BorderThickness="0,0,0,1.962"
+            CornerRadius="0,0,19.621,19.621">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="459" />
+                <ColumnDefinition Width="2" />
+                <ColumnDefinition Width="108" />
+            </Grid.ColumnDefinitions>
+
+            <Grid Grid.Column="0"
+                  Width="411"
+                  Height="29"
+                  Margin="24,8,24,0"
+                  HorizontalAlignment="Center"
+                  VerticalAlignment="Top">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="180" />
+                    <ColumnDefinition Width="51" />
+                    <ColumnDefinition Width="180" />
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0"
+                        Height="29"
+                        Background="#212121"
+                        BorderBrush="#3B3B3B"
+                        BorderThickness="0.5"
+                        CornerRadius="15">
+                    <Grid Margin="13,0,10,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="16" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock VerticalAlignment="Center"
+                                   FontFamily="Inter"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"
+                                   Foreground="#C2C2C2"
+                                   Text="Определить язык" />
+
+                        <Path Grid.Column="1"
+                              Width="7"
+                              Height="4"
+                              HorizontalAlignment="Right"
+                              VerticalAlignment="Center"
+                              Data="M 0 0 L 7 0 L 3.5 4 Z"
+                              Fill="#686868"
+                              Stretch="Fill" />
+                    </Grid>
+                </Border>
+
+                <Canvas Grid.Column="1"
+                        Width="13"
+                        Height="15"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        SnapsToDevicePixels="True">
+                    <Path Data="M13.75 4.25001L4.25 4.25001M13.75 4.25001L10.5985 7.75001M13.75 4.25001L10.5985 0.750006"
+                          Stroke="#8D8D8D"
+                          StrokeThickness="1.5"
+                          StrokeStartLineCap="Round"
+                          StrokeEndLineCap="Round"
+                          StrokeLineJoin="Round" />
+                    <Path Data="M0.75 12.25L10.75 12.25M0.75 12.25L3.90152 8.75001M0.75 12.25L3.90152 15.75"
+                          Stroke="#8D8D8D"
+                          StrokeThickness="1.5"
+                          StrokeStartLineCap="Round"
+                          StrokeEndLineCap="Round"
+                          StrokeLineJoin="Round" />
+                </Canvas>
+
+                <Border Grid.Column="2"
+                        Height="29"
+                        Background="#212121"
+                        BorderBrush="#3B3B3B"
+                        BorderThickness="0.5"
+                        CornerRadius="15">
+                    <Grid Margin="13,0,10,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="16" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock VerticalAlignment="Center"
+                                   FontFamily="Inter"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"
+                                   Foreground="#C2C2C2"
+                                   Text="Русский" />
+
+                        <Path Grid.Column="1"
+                              Width="7"
+                              Height="4"
+                              HorizontalAlignment="Right"
+                              VerticalAlignment="Center"
+                              Data="M 0 0 L 7 0 L 3.5 4 Z"
+                              Fill="#686868"
+                              Stretch="Fill" />
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <Canvas Grid.Column="1"
+                    Width="2"
+                    Height="44"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Top"
+                    SnapsToDevicePixels="True">
+                <Line X1="1"
+                      Y1="0"
+                      X2="1"
+                      Y2="44"
+                      Stroke="#444444"
+                      StrokeThickness="2" />
+            </Canvas>
+
+            <Grid Grid.Column="2"
+                  Width="108"
+                  Height="44"
+                  HorizontalAlignment="Center"
+                  VerticalAlignment="Top">
+                <Canvas Width="55.935"
+                        Height="18"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center">
+                    <Canvas Width="20"
+                            Height="20"
+                             Canvas.Left="0"
+                            Canvas.Top="-1">
+                        <Path Data="M3.29381 12.2938C2.45512 12.2938 2.03577 12.2938 1.70498 12.1568C1.26393 11.9741 0.913518 11.6237 0.730827 11.1827C0.593811 10.8518 0.593811 10.4325 0.593811 9.5938V3.4738C0.593811 2.46571 0.593811 1.96165 0.790002 1.57662C0.962568 1.23792 1.23793 0.962555 1.57663 0.789989C1.96167 0.593798 2.46572 0.593798 3.47381 0.593798H9.59381C10.4325 0.593798 10.8518 0.593798 11.1827 0.730814C11.6237 0.913505 11.9741 1.26392 12.1568 1.70496C12.2938 2.03576 12.2938 2.45511 12.2938 3.2938M9.77381 18.5938H15.7138C16.7219 18.5938 17.226 18.5938 17.611 18.3976C17.9497 18.2251 18.2251 17.9497 18.3976 17.611C18.5938 17.226 18.5938 16.7219 18.5938 15.7138V9.7738C18.5938 8.76571 18.5938 8.26162 18.3976 7.8766C18.2251 7.53792 17.9497 7.26255 17.611 7.08999C17.226 6.8938 16.7219 6.8938 15.7138 6.8938H9.77381C8.76572 6.8938 8.26163 6.8938 7.87661 7.08999C7.53793 7.26255 7.26257 7.53792 7.09 7.8766C6.89381 8.26162 6.89381 8.76571 6.89381 9.7738V15.7138C6.89381 16.7219 6.89381 17.226 7.09 17.611C7.26257 17.9497 7.53793 18.2251 7.87661 18.3976C8.26163 18.5938 8.76572 18.5938 9.77381 18.5938Z"
+                              Stroke="#C7C7C7"
+                              StrokeThickness="1.1876"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              StrokeLineJoin="Round" />
+                    </Canvas>
+
+                    <Canvas Width="20"
+                            Height="20"
+                            Canvas.Left="35.935"
+                            Canvas.Top="-1">
+                        <Path Data="M15.7137 18.5938H8.87357C7.86545 18.5938 7.36135 18.5938 6.97632 18.3976C6.63764 18.2251 6.36224 17.9497 6.1897 17.611C5.9935 17.226 5.9935 16.7219 5.9935 15.7139V8.87404C5.9935 7.86598 5.9935 7.36193 6.1897 6.97691C6.36224 6.63822 6.63764 6.36286 6.97632 6.1903C7.36135 5.99411 7.86545 5.99411 8.87357 5.99411H15.7137C16.7219 5.99411 17.2259 5.99411 17.611 6.1903C17.9497 6.36286 18.225 6.63822 18.3976 6.97691C18.5938 7.36193 18.5938 7.86598 18.5938 8.87404V15.7139C18.5938 16.7219 18.5938 17.226 18.3976 17.611C18.225 17.9497 17.9497 18.2251 17.611 18.3976C17.2259 18.5938 16.7219 18.5938 15.7137 18.5938Z"
+                              Stroke="#C7C7C7"
+                              StrokeThickness="1.1876"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              StrokeLineJoin="Round" />
+                        <Path Data="M10.9441 0.596318C11.5516 0.604543 11.9163 0.639723 12.2113 0.789984C12.55 0.962545 12.8253 1.2379 12.9979 1.57659C13.1482 1.8715 13.1834 2.23621 13.1916 2.84374M2.84385 0.596318C2.23625 0.604543 1.87156 0.639723 1.57662 0.789984C1.23794 0.962545 0.962535 1.2379 0.79 1.57659C0.639697 1.8715 0.604504 2.2362 0.596314 2.84373M0.596314 10.9435C0.604504 11.551 0.639697 11.9158 0.79 12.2107C0.962535 12.5494 1.23794 12.8248 1.57662 12.9973C1.87156 13.1476 2.23625 13.1828 2.84385 13.191M0.593795 5.99365V7.79361M7.79388 0.593798H5.99393"
+                              Stroke="#63AADE"
+                              StrokeThickness="1.1876"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              StrokeLineJoin="Round" />
+                    </Canvas>
+                </Canvas>
+            </Grid>
+        </Grid>
+    </Border>
+</UserControl>
