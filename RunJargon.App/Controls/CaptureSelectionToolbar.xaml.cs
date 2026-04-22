@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Threading;
 using RunJargon.App.Models;
 using RunJargon.App.Services;
 using Border = System.Windows.Controls.Border;
@@ -15,11 +16,14 @@ using FontFamily = System.Windows.Media.FontFamily;
 using Grid = System.Windows.Controls.Grid;
 using Panel = System.Windows.Controls.Panel;
 using TextBlock = System.Windows.Controls.TextBlock;
+using ToolTip = System.Windows.Controls.ToolTip;
 
 namespace RunJargon.App.Controls;
 
 public partial class CaptureSelectionToolbar : System.Windows.Controls.UserControl
 {
+    private static readonly TimeSpan SwapAnimationCycleDuration = TimeSpan.FromMilliseconds(28d / 24d * 1000d);
+
     private IReadOnlyList<TranslationLanguageOption> _sourceLanguages = [];
     private IReadOnlyList<TranslationLanguageOption> _targetLanguages = [];
     private string _recognizedTextToCopy = string.Empty;
@@ -28,10 +32,16 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
     private bool _isSelectionActive = true;
     private bool _isSelectAreaPointerOver;
     private bool _isSelectAreaPressed;
+    private bool _isSwapPointerOver;
+    private bool _isSwapPressed;
+    private bool _isSwapCompletingCycle;
+    private DateTimeOffset? _swapAnimationStartedAt;
+    private CancellationTokenSource? _swapAnimationStopCts;
 
     public CaptureSelectionToolbar()
     {
         InitializeComponent();
+        InitializeSwapAnimationVisuals();
         Configure(
             TranslationLanguageCatalog.GetSourceLanguages(),
             TranslationLanguageCatalog.GetTargetLanguages(),
@@ -135,7 +145,7 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
 
     private void SwapLanguagesButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!CanSwapLanguages())
+        if (_isBusy || !CanSwapLanguages())
         {
             return;
         }
@@ -158,6 +168,36 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
         RebuildMenuButtons();
         UpdateSwapButtonState();
         LanguageSelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void SwapLanguagesButton_MouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        _isSwapPointerOver = true;
+        UpdateSwapButtonState();
+    }
+
+    private void SwapLanguagesButton_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        _isSwapPointerOver = false;
+        _isSwapPressed = false;
+        UpdateSwapButtonState();
+    }
+
+    private void SwapLanguagesButton_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (_isBusy || !CanSwapLanguages())
+        {
+            return;
+        }
+
+        _isSwapPressed = true;
+        UpdateSwapButtonState();
+    }
+
+    private void SwapLanguagesButton_PreviewMouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        _isSwapPressed = false;
+        UpdateSwapButtonState();
     }
 
     private void CloseToolbarButton_Click(object sender, RoutedEventArgs e)
@@ -300,11 +340,14 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
 
     private void UpdateSwapButtonState()
     {
-        SwapLanguagesButton.IsEnabled = !_isBusy;
-        SwapLanguagesButton.Cursor = !_isBusy && CanSwapLanguages()
+        var canSwap = CanSwapLanguages();
+
+        SwapLanguagesButton.IsEnabled = true;
+        SwapLanguagesButton.Cursor = !_isBusy && canSwap
             ? System.Windows.Input.Cursors.Hand
             : System.Windows.Input.Cursors.Arrow;
         SwapLanguagesButton.Opacity = 1;
+        UpdateSwapAnimationVisual(canSwap);
     }
 
     private void UpdateSelectAreaButtonState()
@@ -356,24 +399,165 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
         {
             SourcePopup.IsOpen = false;
             TargetPopup.IsOpen = false;
-            SwapLanguagesButton.Visibility = Visibility.Collapsed;
-            BusySwapView.Visibility = Visibility.Visible;
-            BusySwapAnimationView.PlayAnimation();
-        }
-        else
-        {
-            BusySwapAnimationView.StopAnimation();
-            BusySwapView.Visibility = Visibility.Collapsed;
-            SwapLanguagesButton.Visibility = Visibility.Visible;
         }
 
         UpdateCopyButtonStates();
         UpdateSwapButtonState();
         UpdateSelectAreaButtonState();
+        SwapLanguagesButton.ToolTip = CreateToolbarToolTip(_isBusy ? "Перевод выполняется" : "Обратный перевод");
     }
 
     private static Brush CreateIconBrush(string colorHex)
     {
         return new SolidColorBrush((Color)ColorConverter.ConvertFromString(colorHex));
+    }
+
+    private void UpdateSwapAnimationVisual(bool canSwap)
+    {
+        if (_isBusy)
+        {
+            CancelPendingSwapAnimationStop();
+            _isSwapCompletingCycle = false;
+            SetSwapStaticVisual(SwapVisualState.Hidden);
+            BusySwapAnimationView.Visibility = Visibility.Visible;
+
+            if (!BusySwapAnimationView.IsPlaying)
+            {
+                _swapAnimationStartedAt = DateTimeOffset.UtcNow;
+                BusySwapAnimationView.PlayAnimation();
+            }
+
+            return;
+        }
+
+        if (_isSwapCompletingCycle)
+        {
+            return;
+        }
+
+        if (BusySwapAnimationView.IsPlaying)
+        {
+            _isSwapCompletingCycle = true;
+            _ = CompleteSwapAnimationCycleAsync();
+            return;
+        }
+
+        ApplyIdleSwapVisual(canSwap);
+    }
+
+    private ToolTip CreateToolbarToolTip(string content)
+    {
+        return new ToolTip
+        {
+            Style = (Style)Resources["ToolbarToolTipStyle"],
+            Content = content
+        };
+    }
+
+    private async Task CompleteSwapAnimationCycleAsync()
+    {
+        CancelPendingSwapAnimationStop();
+        var stopCts = new CancellationTokenSource();
+        _swapAnimationStopCts = stopCts;
+
+        try
+        {
+            var remaining = GetRemainingSwapCycleDuration();
+            if (remaining > TimeSpan.Zero)
+            {
+                await Task.Delay(remaining, stopCts.Token);
+            }
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (_isBusy)
+                {
+                    _isSwapCompletingCycle = false;
+                    UpdateSwapAnimationVisual(CanSwapLanguages());
+                    return;
+                }
+
+                BusySwapAnimationView.StopAnimation();
+                BusySwapAnimationView.Visibility = Visibility.Collapsed;
+                _isSwapCompletingCycle = false;
+                ApplyIdleSwapVisual(CanSwapLanguages());
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            if (ReferenceEquals(_swapAnimationStopCts, stopCts))
+            {
+                _swapAnimationStopCts = null;
+            }
+
+            stopCts.Dispose();
+        }
+    }
+
+    private void ApplyIdleSwapVisual(bool canSwap)
+    {
+        BusySwapAnimationView.Visibility = Visibility.Collapsed;
+        SetSwapStaticVisual(
+            _isSwapPressed && canSwap
+                ? SwapVisualState.Pressed
+                : _isSwapPointerOver && canSwap
+                    ? SwapVisualState.Hover
+                    : SwapVisualState.Idle);
+    }
+
+    private TimeSpan GetRemainingSwapCycleDuration()
+    {
+        if (_swapAnimationStartedAt is null)
+        {
+            return TimeSpan.Zero;
+        }
+
+        var elapsed = DateTimeOffset.UtcNow - _swapAnimationStartedAt.Value;
+        var elapsedWithinCycleTicks = elapsed.Ticks % SwapAnimationCycleDuration.Ticks;
+        if (elapsedWithinCycleTicks == 0)
+        {
+            return TimeSpan.Zero;
+        }
+
+        return TimeSpan.FromTicks(SwapAnimationCycleDuration.Ticks - elapsedWithinCycleTicks);
+    }
+
+    private void CancelPendingSwapAnimationStop()
+    {
+        if (_swapAnimationStopCts is null)
+        {
+            return;
+        }
+
+        _swapAnimationStopCts.Cancel();
+        _swapAnimationStopCts.Dispose();
+        _swapAnimationStopCts = null;
+    }
+
+    private void InitializeSwapAnimationVisuals()
+    {
+        IdleSwapAnimationView.StopAnimation();
+        HoverSwapAnimationView.StopAnimation();
+        PressedSwapAnimationView.StopAnimation();
+        BusySwapAnimationView.StopAnimation();
+        SetSwapStaticVisual(SwapVisualState.Idle);
+    }
+
+    private void SetSwapStaticVisual(SwapVisualState state)
+    {
+        IdleSwapAnimationView.Visibility = state == SwapVisualState.Idle ? Visibility.Visible : Visibility.Collapsed;
+        HoverSwapAnimationView.Visibility = state == SwapVisualState.Hover ? Visibility.Visible : Visibility.Collapsed;
+        PressedSwapAnimationView.Visibility = state == SwapVisualState.Pressed ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private enum SwapVisualState
+    {
+        Hidden,
+        Idle,
+        Hover,
+        Pressed
     }
 }

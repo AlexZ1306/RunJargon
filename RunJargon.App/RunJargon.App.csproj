@@ -17,9 +17,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Resource Include="..\panel\icons8-sync-18x18.json">
-      <Link>Assets\icons8-sync-18x18.json</Link>
-    </Resource>
+    <Resource Include="Assets\icons8-sync-18x18.idle.json" />
+    <Resource Include="Assets\icons8-sync-18x18.hover.json" />
+    <Resource Include="Assets\icons8-sync-18x18.pressed.json" />
     <Resource Include="icon\app.ico" />
     <Content Include="icon\tray.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
