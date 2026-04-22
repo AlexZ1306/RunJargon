@@ -68,21 +68,28 @@ public sealed class SelectionOverlayHost : IDisposable
 
     public async Task BeginSelectionAsync()
     {
-        await InvokeOnToolbarAsync(toolbar =>
-        {
-            toolbar.SetBusy(false);
-            toolbar.SetSelectionActive(true);
-            toolbar.PositionOnScreen(Forms.Screen.FromPoint(Forms.Cursor.Position));
-            return Task.CompletedTask;
-        }).ConfigureAwait(false);
-
         var dispatcher = _dispatcher;
         if (dispatcher is null || _isClosed)
         {
             throw new ObjectDisposedException(nameof(SelectionOverlayHost));
         }
 
-        await dispatcher.InvokeAsync(StartSelectionSurfaceCore).Task.ConfigureAwait(false);
+        var toolbarWindow = await _toolbarWindowTcs.Task.ConfigureAwait(false);
+        await dispatcher.InvokeAsync(() =>
+        {
+            toolbarWindow.SetBusy(false);
+            toolbarWindow.SetSelectionActive(true);
+            toolbarWindow.PositionOnScreen(Forms.Screen.FromPoint(Forms.Cursor.Position));
+
+            StartSelectionSurfaceCore();
+
+            if (!toolbarWindow.IsVisible)
+            {
+                toolbarWindow.Show();
+            }
+
+            toolbarWindow.BringToFront();
+        }).Task.ConfigureAwait(false);
     }
 
     public async Task<ScreenRegion?> WaitForSelectionAsync()
@@ -237,11 +244,11 @@ public sealed class SelectionOverlayHost : IDisposable
 
             toolbarWindow.LanguageSelectionChanged += ToolbarWindow_LanguageSelectionChanged;
             toolbarWindow.SelectAreaRequested += ToolbarWindow_SelectAreaRequested;
+            toolbarWindow.SelectionCancelRequested += ToolbarWindow_SelectionCancelRequested;
             toolbarWindow.CloseRequested += ToolbarWindow_CloseRequested;
             toolbarWindow.Closed += ToolbarWindow_Closed;
 
             _toolbarWindowTcs.TrySetResult(toolbarWindow);
-            toolbarWindow.Show();
             Dispatcher.Run();
         }
         catch (Exception ex)
@@ -283,16 +290,19 @@ public sealed class SelectionOverlayHost : IDisposable
                 dispatcher.Invoke(() =>
                 {
                     _selectionSurfaceWindow = null;
+                    var toolbarWindow = _toolbarWindowTcs.Task.Result;
 
                     if (task.IsCompletedSuccessfully && task.Result is ScreenRegion region)
                     {
-                        var toolbarWindow = _toolbarWindowTcs.Task.Result;
                         toolbarWindow.PositionForRegion(region);
                         toolbarWindow.SetSelectionActive(false);
+                        toolbarWindow.BringToFront();
                         return;
                     }
 
-                    _ = CloseAsync();
+                    toolbarWindow.SetSelectionActive(false);
+                    toolbarWindow.SetBusy(false);
+                    toolbarWindow.BringToFront();
                 });
             },
             CancellationToken.None,
@@ -323,6 +333,27 @@ public sealed class SelectionOverlayHost : IDisposable
         _ = CloseAsync();
     }
 
+    private void ToolbarWindow_SelectionCancelRequested(object? sender, EventArgs e)
+    {
+        var dispatcher = _dispatcher;
+        if (dispatcher is null || _isClosed)
+        {
+            return;
+        }
+
+        dispatcher.Invoke(() =>
+        {
+            if (_selectionSurfaceWindow is null)
+            {
+                return;
+            }
+
+            _selectionSurfaceWindow.Close();
+            _selectionSurfaceWindow = null;
+            _currentSelectionTask = null;
+        });
+    }
+
     private void ToolbarWindow_Closed(object? sender, EventArgs e)
     {
         if (sender is SelectionToolbarWindow toolbarWindow)
@@ -330,6 +361,7 @@ public sealed class SelectionOverlayHost : IDisposable
             UpdateSelectedLanguages(toolbarWindow);
             toolbarWindow.LanguageSelectionChanged -= ToolbarWindow_LanguageSelectionChanged;
             toolbarWindow.SelectAreaRequested -= ToolbarWindow_SelectAreaRequested;
+            toolbarWindow.SelectionCancelRequested -= ToolbarWindow_SelectionCancelRequested;
             toolbarWindow.CloseRequested -= ToolbarWindow_CloseRequested;
             toolbarWindow.Closed -= ToolbarWindow_Closed;
         }

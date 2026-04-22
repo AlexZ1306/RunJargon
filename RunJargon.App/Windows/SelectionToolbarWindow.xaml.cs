@@ -1,5 +1,7 @@
 using System.Windows;
+using System.Windows.Input;
 using Forms = System.Windows.Forms;
+using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using RunJargon.App.Models;
 using RunJargon.App.Services;
 using RunJargon.App.Utilities;
@@ -38,20 +40,25 @@ public partial class SelectionToolbarWindow : Window
 
         Loaded += SelectionToolbarWindow_Loaded;
         Closed += SelectionToolbarWindow_Closed;
+        PreviewKeyDown += SelectionToolbarWindow_PreviewKeyDown;
         CaptureToolbar.CloseRequested += CaptureToolbar_CloseRequested;
         CaptureToolbar.LanguageSelectionChanged += CaptureToolbar_LanguageSelectionChanged;
         CaptureToolbar.SelectAreaRequested += CaptureToolbar_SelectAreaRequested;
+        CaptureToolbar.SelectionCancelRequested += CaptureToolbar_SelectionCancelRequested;
     }
 
     public event EventHandler? CloseRequested;
     public event EventHandler? LanguageSelectionChanged;
     public event EventHandler? SelectAreaRequested;
+    public event EventHandler? SelectionCancelRequested;
 
     public string? SelectedSourceLanguageCode =>
         CaptureToolbar.SelectedSourceLanguageCode ?? _initialSourceLanguageCode;
 
     public string? SelectedTargetLanguageCode =>
         CaptureToolbar.SelectedTargetLanguageCode ?? _initialTargetLanguageCode;
+
+    public bool IsSelectionActive => CaptureToolbar.IsSelectionActive;
 
     public void SetBusy(bool isBusy)
     {
@@ -108,6 +115,8 @@ public partial class SelectionToolbarWindow : Window
         CaptureToolbar.CloseRequested -= CaptureToolbar_CloseRequested;
         CaptureToolbar.LanguageSelectionChanged -= CaptureToolbar_LanguageSelectionChanged;
         CaptureToolbar.SelectAreaRequested -= CaptureToolbar_SelectAreaRequested;
+        CaptureToolbar.SelectionCancelRequested -= CaptureToolbar_SelectionCancelRequested;
+        PreviewKeyDown -= SelectionToolbarWindow_PreviewKeyDown;
     }
 
     private void CaptureToolbar_CloseRequested(object? sender, EventArgs e)
@@ -123,5 +132,28 @@ public partial class SelectionToolbarWindow : Window
     private void CaptureToolbar_SelectAreaRequested(object? sender, EventArgs e)
     {
         SelectAreaRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void CaptureToolbar_SelectionCancelRequested(object? sender, EventArgs e)
+    {
+        SelectionCancelRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void SelectionToolbarWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        if (IsSelectionActive)
+        {
+            CaptureToolbar.SetSelectionActive(false);
+            SelectionCancelRequested?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        CloseRequested?.Invoke(this, EventArgs.Empty);
     }
 }

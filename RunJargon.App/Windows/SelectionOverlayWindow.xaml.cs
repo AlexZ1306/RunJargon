@@ -360,6 +360,10 @@ public partial class SelectionOverlayWindow : Window
             return;
         }
 
+        e.Handled = true;
+        Mouse.Capture(null);
+        _dragStart = null;
+        SelectionBorder.Visibility = Visibility.Collapsed;
         _selectionTcs.TrySetResult(null);
         Close();
     }

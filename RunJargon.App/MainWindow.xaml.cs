@@ -312,8 +312,6 @@ public partial class MainWindow : Window
 
     private async Task<ScreenRegion?> PickRegionAsync()
     {
-        await Task.Yield();
-
         if (_selectionOverlayHost is not null)
         {
             await _selectionOverlayHost.BeginSelectionAsync();
@@ -338,15 +336,6 @@ public partial class MainWindow : Window
         ApplyLanguageSelection(
             selector.SelectedSourceLanguageCode,
             selector.SelectedTargetLanguageCode);
-
-        if (region is null && ReferenceEquals(_selectionOverlayHost, selector))
-        {
-            _selectionOverlayHost = null;
-            selector.Closed -= SelectionOverlayHost_Closed;
-            selector.LanguageSelectionChanged -= SelectionOverlayHost_LanguageSelectionChanged;
-            selector.SelectAreaRequested -= SelectionOverlayHost_SelectAreaRequested;
-            selector.Dispose();
-        }
 
         return region;
     }

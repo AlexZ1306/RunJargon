@@ -55,9 +55,12 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
 
     public string? SelectedTargetLanguageCode { get; private set; }
 
+    public bool IsSelectionActive => _isSelectionActive;
+
     public event EventHandler? CloseRequested;
     public event EventHandler? LanguageSelectionChanged;
     public event EventHandler? SelectAreaRequested;
+    public event EventHandler? SelectionCancelRequested;
 
     public void UpdateCopyTexts(string recognizedTextToCopy, string translatedTextToCopy)
     {
@@ -207,8 +210,16 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
 
     private void SelectAreaButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_isBusy || _isSelectionActive)
+        if (_isBusy)
         {
+            return;
+        }
+
+        if (_isSelectionActive)
+        {
+            _isSelectionActive = false;
+            UpdateSelectAreaButtonState();
+            SelectionCancelRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
 
