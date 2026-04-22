@@ -20,6 +20,8 @@ public sealed class SegmentOcrRefinementService
         IReadOnlyList<LayoutTextSegment> segments,
         Bitmap snapshotBitmap,
         string? preferredLanguageTag,
+        SegmentRefinementMode refinementMode,
+        CapturePerformanceTrace? performanceTrace,
         CancellationToken cancellationToken)
     {
         if (segments.Count == 0)
@@ -35,6 +37,8 @@ public sealed class SegmentOcrRefinementService
                 segment,
                 snapshotBitmap,
                 preferredLanguageTag,
+                refinementMode,
+                performanceTrace,
                 cancellationToken));
         }
 
@@ -45,6 +49,7 @@ public sealed class SegmentOcrRefinementService
         LayoutTextSegment segment,
         Bitmap snapshotBitmap,
         string? preferredLanguageTag,
+        CapturePerformanceTrace? performanceTrace,
         CancellationToken cancellationToken)
     {
         if (segment.Kind != TextLayoutKind.UiLabel)
@@ -52,11 +57,13 @@ public sealed class SegmentOcrRefinementService
             return segment;
         }
 
+        performanceTrace?.Counters.IncrementRecoveryAttempts();
         var recoveredCandidate = await _uiLabelOcrEnsembleService.RecognizeBestAsync(
             segment,
             snapshotBitmap,
             preferredLanguageTag,
             cancellationToken,
+            performanceTrace,
             allowDeepRecovery: true);
         if (!ShouldAdoptRefinement(segment.Text, recoveredCandidate, segment.Kind))
         {
@@ -70,20 +77,24 @@ public sealed class SegmentOcrRefinementService
         LayoutTextSegment segment,
         Bitmap snapshotBitmap,
         string? preferredLanguageTag,
+        SegmentRefinementMode refinementMode,
+        CapturePerformanceTrace? performanceTrace,
         CancellationToken cancellationToken)
     {
-        if (!ShouldAttemptRefinement(segment))
+        if (!ShouldAttemptRefinement(segment, refinementMode))
         {
             return segment;
         }
 
+        performanceTrace?.Counters.IncrementCropRefinements();
         if (segment.Kind == TextLayoutKind.UiLabel)
         {
             var bestUiLabelCandidate = await _uiLabelOcrEnsembleService.RecognizeBestAsync(
                 segment,
                 snapshotBitmap,
                 preferredLanguageTag,
-                cancellationToken);
+                cancellationToken,
+                performanceTrace);
             if (ShouldAdoptRefinement(segment.Text, bestUiLabelCandidate, segment.Kind))
             {
                 return ApplyRefinedText(segment, bestUiLabelCandidate);
@@ -95,7 +106,7 @@ public sealed class SegmentOcrRefinementService
             crop,
             preferredLanguageTag,
             cancellationToken,
-            new OcrRequestOptions(OcrExecutionProfile.SegmentRefinement));
+            new OcrRequestOptions(OcrExecutionProfile.SegmentRefinement, performanceTrace));
         var candidateText = TextRegionIntelligence.NormalizeWhitespace(response.Text);
         if (!ShouldAdoptRefinement(segment.Text, candidateText, segment.Kind))
         {
@@ -105,7 +116,7 @@ public sealed class SegmentOcrRefinementService
         return ApplyRefinedText(segment, candidateText);
     }
 
-    private static bool ShouldAttemptRefinement(LayoutTextSegment segment)
+    private static bool ShouldAttemptRefinement(LayoutTextSegment segment, SegmentRefinementMode refinementMode)
     {
         var normalized = TextRegionIntelligence.NormalizeWhitespace(segment.Text);
         if (string.IsNullOrWhiteSpace(normalized) || segment.Bounds.IsEmpty)
@@ -119,12 +130,23 @@ public sealed class SegmentOcrRefinementService
         }
 
         var wordCount = CountWords(normalized);
-        if (segment.Kind == TextLayoutKind.UiLabel)
+        return refinementMode switch
         {
-            return wordCount <= 4 && normalized.Length <= 36;
-        }
-
-        return wordCount <= 5 && normalized.Length <= 42;
+            SegmentRefinementMode.DocumentLike => segment.Kind == TextLayoutKind.TextLine
+                                                 && wordCount <= 3
+                                                 && normalized.Length <= 24
+                                                 && OcrQualityHeuristics.ScoreLineText(normalized)
+                                                 <= Math.Max(24, normalized.Length * 2),
+            SegmentRefinementMode.Mixed => segment.Kind switch
+            {
+                TextLayoutKind.UiLabel => wordCount <= 4 && normalized.Length <= 36,
+                TextLayoutKind.TextLine => wordCount <= 3 && normalized.Length <= 24,
+                _ => false
+            },
+            _ => segment.Kind == TextLayoutKind.UiLabel
+                ? wordCount <= 4 && normalized.Length <= 36
+                : wordCount <= 5 && normalized.Length <= 42
+        };
     }
 
     private static Bitmap CreateSegmentCrop(

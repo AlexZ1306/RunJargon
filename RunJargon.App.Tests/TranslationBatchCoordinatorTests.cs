@@ -38,6 +38,25 @@ public sealed class TranslationBatchCoordinatorTests
         Assert.Equal(["single:alpha", "single:beta"], results.Select(item => item.TranslatedText).ToArray());
     }
 
+    [Fact]
+    public async Task TranslateAsync_UsesCacheBeforeCallingService()
+    {
+        var service = new FakeBatchTranslationService();
+        var cache = new TranslationTextCache(8);
+        cache.Set("en", "ru", "one", "cached:one");
+
+        var results = await TranslationBatchCoordinator.TranslateAsync(
+            service,
+            ["one", "two"],
+            "en",
+            "ru",
+            CancellationToken.None,
+            cache);
+
+        Assert.Equal(1, service.BatchCallCount);
+        Assert.Equal(["cached:one", "batch:two"], results.Select(item => item.TranslatedText).ToArray());
+    }
+
     private sealed class FakeBatchTranslationService : ITranslationService, IBatchTranslationService
     {
         public int BatchCallCount { get; private set; }

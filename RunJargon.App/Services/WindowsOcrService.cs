@@ -1,6 +1,9 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Diagnostics;
 using Windows.Foundation;
 using Windows.Globalization;
 using Windows.Graphics.Imaging;
@@ -13,6 +16,10 @@ namespace RunJargon.App.Services;
 
 public sealed class WindowsOcrService : IOcrService
 {
+    private const string UserProfileEngineKey = "$user-profile";
+    private readonly object _engineCacheGate = new();
+    private readonly Dictionary<string, OcrEngine?> _engineCache = new(StringComparer.OrdinalIgnoreCase);
+
     public string DisplayName => "Windows OCR";
 
     public async Task<OcrResponse> RecognizeAsync(
@@ -22,6 +29,7 @@ public sealed class WindowsOcrService : IOcrService
         OcrRequestOptions? options = null)
     {
         options ??= new OcrRequestOptions();
+        var performanceTrace = options.PerformanceTrace;
         var availableLanguages = OcrEngine.AvailableRecognizerLanguages
             .Where(language => language is not null)
             .ToArray();
@@ -31,13 +39,17 @@ public sealed class WindowsOcrService : IOcrService
                 "Windows OCR недоступен. Проверь, что в системе установлены OCR language packs.");
         }
 
+        var preprocessStopwatch = Stopwatch.StartNew();
         var candidates = GetCandidateLanguages(preferredLanguageTag, availableLanguages, options.Profile).ToArray();
         var variants = CreateVariants(bitmap, options.Profile);
+        preprocessStopwatch.Stop();
+        RecordPhaseDuration(options.Profile, performanceTrace, preprocessStopwatch.Elapsed, isPreprocess: true);
         try
         {
             OcrResponse? bestResponse = null;
             var bestScore = int.MinValue;
             var createdAtLeastOneEngine = false;
+            var recognizeDuration = TimeSpan.Zero;
 
             foreach (var candidate in candidates)
             {
@@ -62,13 +74,21 @@ public sealed class WindowsOcrService : IOcrService
                     cancellationToken.ThrowIfCancellationRequested();
 
                     OcrResponse response;
+                    var recognizeStopwatch = Stopwatch.StartNew();
                     try
                     {
                         response = await RecognizeWithBitmapAsync(engine, variant.Bitmap, variant.Scale);
                     }
                     catch
                     {
+                        recognizeStopwatch.Stop();
                         continue;
+                    }
+                    finally
+                    {
+                        recognizeStopwatch.Stop();
+                        recognizeDuration += recognizeStopwatch.Elapsed;
+                        performanceTrace?.Counters.IncrementOcrRequests();
                     }
 
                     var score = OcrQualityHeuristics.ScoreResponse(response, candidate.DisplayTag);
@@ -120,6 +140,7 @@ public sealed class WindowsOcrService : IOcrService
 
             if (bestResponse is not null)
             {
+                RecordPhaseDuration(options.Profile, performanceTrace, recognizeDuration, isPreprocess: false);
                 return bestResponse;
             }
 
@@ -128,6 +149,7 @@ public sealed class WindowsOcrService : IOcrService
                 throw new InvalidOperationException(BuildEngineCreationErrorMessage(preferredLanguageTag, availableLanguages));
             }
 
+            RecordPhaseDuration(options.Profile, performanceTrace, recognizeDuration, isPreprocess: false);
             return new OcrResponse(
                 string.Empty,
                 Array.Empty<OcrLineRegion>(),
@@ -260,16 +282,28 @@ public sealed class WindowsOcrService : IOcrService
         }
     }
 
-    private static OcrEngine? CreateEngine(OcrLanguageCandidate candidate)
+    private OcrEngine? CreateEngine(OcrLanguageCandidate candidate)
     {
-        if (candidate.UseUserProfile)
-        {
-            return OcrEngine.TryCreateFromUserProfileLanguages();
-        }
+        var cacheKey = candidate.UseUserProfile
+            ? UserProfileEngineKey
+            : candidate.Language?.LanguageTag ?? string.Empty;
 
-        return candidate.Language is null
-            ? null
-            : OcrEngine.TryCreateFromLanguage(candidate.Language);
+        lock (_engineCacheGate)
+        {
+            if (_engineCache.TryGetValue(cacheKey, out var cached))
+            {
+                return cached;
+            }
+
+            var engine = candidate.UseUserProfile
+                ? OcrEngine.TryCreateFromUserProfileLanguages()
+                : candidate.Language is null
+                    ? null
+                    : OcrEngine.TryCreateFromLanguage(candidate.Language);
+
+            _engineCache[cacheKey] = engine;
+            return engine;
+        }
     }
 
     private static IReadOnlyList<OcrBitmapVariant> CreateVariants(Bitmap source, OcrExecutionProfile profile)
@@ -317,7 +351,7 @@ public sealed class WindowsOcrService : IOcrService
         var targetWidth = Math.Max(1, (int)Math.Round(source.Width * scale));
         var targetHeight = Math.Max(1, (int)Math.Round(source.Height * scale));
 
-        var prepared = new Bitmap(targetWidth, targetHeight, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+        var prepared = new Bitmap(targetWidth, targetHeight, PixelFormat.Format24bppRgb);
         using var graphics = Graphics.FromImage(prepared);
         graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
         graphics.SmoothingMode = SmoothingMode.HighQuality;
@@ -330,26 +364,71 @@ public sealed class WindowsOcrService : IOcrService
             return prepared;
         }
 
-        for (var y = 0; y < prepared.Height; y++)
+        var rect = new Rectangle(0, 0, prepared.Width, prepared.Height);
+        var bitmapData = prepared.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format24bppRgb);
+        try
         {
-            for (var x = 0; x < prepared.Width; x++)
+            var stride = Math.Abs(bitmapData.Stride);
+            var length = stride * prepared.Height;
+            var buffer = new byte[length];
+            Marshal.Copy(bitmapData.Scan0, buffer, 0, length);
+
+            for (var y = 0; y < prepared.Height; y++)
             {
-                var pixel = prepared.GetPixel(x, y);
-                var luminance = (int)Math.Round((pixel.R * 0.299) + (pixel.G * 0.587) + (pixel.B * 0.114));
-                var contrast = Math.Clamp((int)Math.Round(((luminance - 128) * 1.24) + 128), 0, 255);
-
-                if (mode == OcrPreprocessMode.Grayscale)
+                var row = y * stride;
+                for (var x = 0; x < prepared.Width; x++)
                 {
-                    prepared.SetPixel(x, y, System.Drawing.Color.FromArgb(contrast, contrast, contrast));
-                    continue;
-                }
+                    var index = row + (x * 3);
+                    var blue = buffer[index];
+                    var green = buffer[index + 1];
+                    var red = buffer[index + 2];
+                    var luminance = (int)Math.Round((red * 0.299) + (green * 0.587) + (blue * 0.114));
+                    var contrast = Math.Clamp((int)Math.Round(((luminance - 128) * 1.24) + 128), 0, 255);
 
-                var normalized = contrast < 190 ? 0 : 255;
-                prepared.SetPixel(x, y, System.Drawing.Color.FromArgb(normalized, normalized, normalized));
+                    if (mode == OcrPreprocessMode.Grayscale)
+                    {
+                        buffer[index] = (byte)contrast;
+                        buffer[index + 1] = (byte)contrast;
+                        buffer[index + 2] = (byte)contrast;
+                        continue;
+                    }
+
+                    var normalized = (byte)(contrast < 190 ? 0 : 255);
+                    buffer[index] = normalized;
+                    buffer[index + 1] = normalized;
+                    buffer[index + 2] = normalized;
+                }
             }
+
+            Marshal.Copy(buffer, 0, bitmapData.Scan0, length);
+        }
+        finally
+        {
+            prepared.UnlockBits(bitmapData);
         }
 
         return prepared;
+    }
+
+    private static void RecordPhaseDuration(
+        OcrExecutionProfile profile,
+        CapturePerformanceTrace? performanceTrace,
+        TimeSpan duration,
+        bool isPreprocess)
+    {
+        if (performanceTrace is null || duration <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        var phase = profile switch
+        {
+            OcrExecutionProfile.FullPage when isPreprocess => CapturePerformancePhase.FullPageOcrPreprocess,
+            OcrExecutionProfile.FullPage => CapturePerformancePhase.FullPageOcrRecognize,
+            OcrExecutionProfile.UiLabelRecovery => CapturePerformancePhase.UiLabelRecovery,
+            _ => CapturePerformancePhase.SegmentRefinement
+        };
+        performanceTrace.AddDuration(phase, duration);
     }
 
     private static OcrLineRegion ToOcrLineRegion(OcrLine line, double scale)

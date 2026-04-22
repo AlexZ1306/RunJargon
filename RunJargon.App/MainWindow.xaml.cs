@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Text;
@@ -20,8 +21,13 @@ public partial class MainWindow : Window
     private readonly ImageInpaintingService _imageInpaintingService = new();
     private readonly LayoutSegmentationService _layoutSegmentationService = new();
     private readonly LayoutObservationFusionService _layoutObservationFusionService = new();
+    private readonly CaptureProcessingModeClassifier _captureProcessingModeClassifier = new();
     private readonly UiAutomationAssistPolicyService _uiAutomationAssistPolicyService = new();
     private readonly VisualSegmentRefinementService _visualSegmentRefinementService = new();
+    private readonly ICapturePipelineExecutor _capturePipelineExecutor = new CapturePipelineExecutor();
+    private readonly BackgroundProcessingWorker _backgroundProcessingWorker = new();
+    private readonly CapturePerformanceTraceStore _performanceTraceStore = new();
+    private readonly ITranslationTextCache _translationTextCache = new TranslationTextCache();
     private readonly IOcrService _ocrService;
     private readonly SegmentOcrRefinementService _segmentOcrRefinementService;
     private readonly UiAutomationTextService _uiAutomationTextService = new();
@@ -32,10 +38,12 @@ public partial class MainWindow : Window
     private TrayIconService? _trayIconService;
     private TranslationResultWindow? _translationResultWindow;
     private TranslationOverlayWindow? _translationOverlayWindow;
-    private SelectionOverlayWindow? _selectionOverlayWindow;
+    private SelectionOverlayHost? _selectionOverlayHost;
     private ScreenRegion? _lastCapturedRegion;
     private string _lastRecognizedTextForCopy = string.Empty;
     private string _lastTranslatedTextForCopy = string.Empty;
+    private string? _lastWarmedSourceLanguage;
+    private string? _lastWarmedTargetLanguage;
     private bool _allowAppExit;
     private bool _hasShownTrayHint;
     private bool _isBusy;
@@ -46,13 +54,17 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        _ocrService = new CompositeOcrService(new WindowsOcrService());
+        _ocrService = new QueuedOcrService(
+            new CompositeOcrService(new WindowsOcrService()),
+            new OcrExecutionWorker());
         _segmentOcrRefinementService = new SegmentOcrRefinementService(_ocrService);
         _translationSettings = _appSettingsService.Load();
         _translationService = TranslationServiceFactory.Create(_translationSettings);
         InitializeComponent();
 
         RepeatLastAreaButton.IsEnabled = false;
+        SourceLanguageCombo.SelectionChanged += LanguageCombo_SelectionChanged;
+        TargetLanguageCombo.SelectionChanged += LanguageCombo_SelectionChanged;
         LoadLanguageSelectorsIntoUi();
         LoadTranslatorSettingsIntoUi();
         RefreshTranslatorPresentation();
@@ -92,10 +104,15 @@ public partial class MainWindow : Window
         }
 
         _hotKeyService?.Dispose();
-        CloseSelectionOverlay();
+        CloseSelectionOverlayAsync().GetAwaiter().GetResult();
         _translationOverlayWindow?.Close();
         _translationResultWindow?.Close();
         DisposeTranslationService();
+        _backgroundProcessingWorker.Dispose();
+        if (_ocrService is IDisposable disposableOcr)
+        {
+            disposableOcr.Dispose();
+        }
     }
 
     private void MainWindow_Closing(object? sender, CancelEventArgs e)
@@ -151,22 +168,38 @@ public partial class MainWindow : Window
             ClearDisplayedTexts();
             _lastRecognizedTextForCopy = string.Empty;
             _lastTranslatedTextForCopy = string.Empty;
-            _selectionOverlayWindow?.UpdateCopyTexts(string.Empty, string.Empty);
-            if (_selectionOverlayWindow is not null)
+            if (_selectionOverlayHost is not null)
             {
-                await _selectionOverlayWindow.PrepareForCleanCaptureAsync();
+                await _selectionOverlayHost.UpdateCopyTextsAsync(string.Empty, string.Empty);
+                await _selectionOverlayHost.PrepareForCleanCaptureAsync();
             }
 
+            var performanceTrace = new CapturePerformanceTrace();
             SetStatus("Делаю снимок выделенной области...");
-            using var bitmap = _screenCaptureService.Capture(region.Value);
-            var snapshotPngBytes = EncodeSnapshotPng(bitmap);
-            _selectionOverlayWindow?.ShowToolbarOnly(isBusy: true);
+            System.Drawing.Bitmap bitmap;
+            using (performanceTrace.Measure(CapturePerformancePhase.Capture))
+            {
+                bitmap = _screenCaptureService.Capture(region.Value);
+            }
+
+            using var capturedBitmap = bitmap;
+            byte[] snapshotPngBytes;
+            using (performanceTrace.Measure(CapturePerformancePhase.SnapshotEncode))
+            {
+                snapshotPngBytes = EncodeSnapshotPng(capturedBitmap);
+            }
+
+            if (_selectionOverlayHost is not null)
+            {
+                await _selectionOverlayHost.ShowToolbarOnlyAsync(isBusy: true);
+            }
 
             SetStatus("Распознаю текст локально через Windows OCR...");
             var ocrResult = await _ocrService.RecognizeAsync(
-                bitmap,
+                capturedBitmap,
                 GetPreferredOcrLanguageTag(),
-                CancellationToken.None);
+                CancellationToken.None,
+                new OcrRequestOptions(OcrExecutionProfile.FullPage, performanceTrace));
             var recognizedTextForDisplay = string.IsNullOrWhiteSpace(ocrResult.Text)
                 ? "Windows OCR не нашел текста в выделенной области."
                 : ocrResult.Text;
@@ -174,56 +207,45 @@ public partial class MainWindow : Window
             _lastRecognizedTextForCopy = string.IsNullOrWhiteSpace(ocrResult.Text)
                 ? string.Empty
                 : ocrResult.Text;
-            _selectionOverlayWindow?.UpdateCopyTexts(_lastRecognizedTextForCopy, string.Empty);
+            if (_selectionOverlayHost is not null)
+            {
+                await _selectionOverlayHost.UpdateCopyTextsAsync(_lastRecognizedTextForCopy, string.Empty);
+            }
 
             var selectedSourceLanguage = GetSelectedLanguageCode(SourceLanguageCombo);
             var targetLanguage = GetSelectedLanguageCode(TargetLanguageCombo) ?? "ru";
+            var preferredOcrLanguageTag = GetPreferredOcrLanguageTag();
 
-            TranslationResponse translationResult;
-            IReadOnlyList<TranslatedOcrLine> overlayLines;
-            if (string.IsNullOrWhiteSpace(ocrResult.Text))
-            {
-                overlayLines = Array.Empty<TranslatedOcrLine>();
-                translationResult = new TranslationResponse(
-                    string.Empty,
-                    _translationService.DisplayName,
-                    "Перевод пропущен, потому что OCR не распознал текст.");
-            }
-            else
-            {
-                SetStatus($"Перевожу текст через {_translationService.DisplayName}...");
-                var overlayBuild = await BuildOverlayLinesAsync(
+            SetStatus($"Перевожу текст через {_translationService.DisplayName}...");
+            var processedCapture = await _capturePipelineExecutor.ExecuteAsync(
+                async cancellationToken => await ProcessPostOcrAsync(
                     ocrResult,
                     region.Value,
-                    bitmap,
-                    GetPreferredOcrLanguageTag(),
+                    capturedBitmap,
+                    snapshotPngBytes,
+                    preferredOcrLanguageTag,
                     selectedSourceLanguage,
                     targetLanguage,
-                    CancellationToken.None);
-                overlayLines = overlayBuild.Lines;
-                if (!string.IsNullOrWhiteSpace(overlayBuild.RecognizedPreview))
-                {
-                    RecognizedTextBox.Text = overlayBuild.RecognizedPreview;
-                    _lastRecognizedTextForCopy = overlayBuild.RecognizedPreview;
-                    _selectionOverlayWindow?.UpdateCopyTexts(_lastRecognizedTextForCopy, string.Empty);
-                }
-                translationResult = overlayLines.Count > 0
-                    ? BuildTranslationResponseFromOverlayLines(overlayLines)
-                    : await TranslateWholeTextAsync(
-                        ocrResult.Text,
-                        selectedSourceLanguage,
-                        targetLanguage,
-                        CancellationToken.None);
-            }
+                    performanceTrace,
+                    cancellationToken),
+                CancellationToken.None);
+            var overlayLines = processedCapture.OverlayLines;
+            var translationResult = processedCapture.Translation;
 
-            var preparedBackgroundPngBytes = overlayLines.Count > 0
-                ? BuildPreparedBackground(snapshotPngBytes, bitmap.Width, bitmap.Height, overlayLines)
-                : snapshotPngBytes;
+            if (!string.IsNullOrWhiteSpace(processedCapture.RecognizedPreview))
+            {
+                RecognizedTextBox.Text = processedCapture.RecognizedPreview;
+                _lastRecognizedTextForCopy = processedCapture.RecognizedPreview;
+                if (_selectionOverlayHost is not null)
+                {
+                    await _selectionOverlayHost.UpdateCopyTextsAsync(_lastRecognizedTextForCopy, string.Empty);
+                }
+            }
 
             var sessionResult = new CaptureSessionResult(
                 region.Value,
                 snapshotPngBytes,
-                preparedBackgroundPngBytes,
+                processedCapture.PreparedBackgroundPngBytes,
                 ocrResult,
                 translationResult,
                 overlayLines,
@@ -235,10 +257,17 @@ public partial class MainWindow : Window
             _lastTranslatedTextForCopy = string.IsNullOrWhiteSpace(translationResult.TranslatedText)
                 ? string.Empty
                 : translationResult.TranslatedText;
-            _selectionOverlayWindow?.UpdateCopyTexts(_lastRecognizedTextForCopy, _lastTranslatedTextForCopy);
-            _selectionOverlayWindow?.SetBusy(false);
+            if (_selectionOverlayHost is not null)
+            {
+                await _selectionOverlayHost.UpdateCopyTextsAsync(_lastRecognizedTextForCopy, _lastTranslatedTextForCopy);
+                await _selectionOverlayHost.SetBusyAsync(false);
+            }
 
-            ShowTranslationPresentation(sessionResult);
+            using (performanceTrace.Measure(CapturePerformancePhase.OverlayCompose))
+            {
+                ShowTranslationPresentation(sessionResult);
+            }
+            _performanceTraceStore.Add(performanceTrace);
 
             var tail = string.IsNullOrWhiteSpace(translationResult.Note)
                 ? string.Empty
@@ -248,7 +277,10 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            _selectionOverlayWindow?.SetBusy(false);
+            if (_selectionOverlayHost is not null)
+            {
+                await _selectionOverlayHost.SetBusyAsync(false);
+            }
             SetStatus("Во время обработки произошла ошибка.");
             if (IsVisible)
             {
@@ -280,34 +312,106 @@ public partial class MainWindow : Window
     {
         await Task.Yield();
 
-        var selector = new SelectionOverlayWindow(
+        var selector = new SelectionOverlayHost(
             TranslationLanguageCatalog.GetSourceLanguages(),
             TranslationLanguageCatalog.GetTargetLanguages(),
             GetSelectedLanguageCode(SourceLanguageCombo),
             GetSelectedLanguageCode(TargetLanguageCombo) ?? TranslationLanguageCatalog.GetDefaultTargetLanguage().Code,
             _lastRecognizedTextForCopy,
             _lastTranslatedTextForCopy);
-        selector.Closed += SelectionOverlayWindow_Closed;
-        selector.LanguageSelectionChanged += SelectionOverlayWindow_LanguageSelectionChanged;
-        if (IsVisible)
-        {
-            selector.Owner = this;
-        }
-
-        _selectionOverlayWindow = selector;
-        selector.Show();
+        selector.Closed += SelectionOverlayHost_Closed;
+        selector.LanguageSelectionChanged += SelectionOverlayHost_LanguageSelectionChanged;
+        _selectionOverlayHost = selector;
+        await selector.StartAsync();
 
         var region = await selector.WaitForSelectionAsync();
         ApplyLanguageSelection(
             selector.SelectedSourceLanguageCode,
             selector.SelectedTargetLanguageCode);
+
+        if (region is null && ReferenceEquals(_selectionOverlayHost, selector))
+        {
+            _selectionOverlayHost = null;
+            selector.Closed -= SelectionOverlayHost_Closed;
+            selector.LanguageSelectionChanged -= SelectionOverlayHost_LanguageSelectionChanged;
+            selector.Dispose();
+        }
+
         return region;
+    }
+
+    private async Task<ProcessedCaptureData> ProcessPostOcrAsync(
+        OcrResponse ocrResult,
+        ScreenRegion region,
+        System.Drawing.Bitmap bitmap,
+        byte[] snapshotPngBytes,
+        string? preferredOcrLanguageTag,
+        string? selectedSourceLanguage,
+        string targetLanguage,
+        CapturePerformanceTrace performanceTrace,
+        CancellationToken cancellationToken)
+    {
+        TranslationResponse translationResult;
+        IReadOnlyList<TranslatedOcrLine> overlayLines;
+        string recognizedPreview = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(ocrResult.Text))
+        {
+            overlayLines = Array.Empty<TranslatedOcrLine>();
+            translationResult = new TranslationResponse(
+                string.Empty,
+                _translationService.DisplayName,
+                "Перевод пропущен, потому что OCR не распознал текст.");
+        }
+        else
+        {
+            var overlayBuild = await BuildOverlayLinesAsync(
+                ocrResult,
+                region,
+                bitmap,
+                preferredOcrLanguageTag,
+                selectedSourceLanguage,
+                targetLanguage,
+                performanceTrace,
+                cancellationToken);
+            overlayLines = overlayBuild.Lines;
+            recognizedPreview = overlayBuild.RecognizedPreview;
+            translationResult = overlayLines.Count > 0
+                ? BuildTranslationResponseFromOverlayLines(overlayLines)
+                : await TranslateWholeTextAsync(
+                    ocrResult.Text,
+                    selectedSourceLanguage,
+                    targetLanguage,
+                    performanceTrace,
+                    cancellationToken);
+        }
+
+        byte[] preparedBackgroundPngBytes;
+        if (overlayLines.Count > 0)
+        {
+            performanceTrace.Counters.IncrementInpaintCalls();
+            using (performanceTrace.Measure(CapturePerformancePhase.Inpainting))
+            {
+                preparedBackgroundPngBytes = await _backgroundProcessingWorker.ExecuteAsync(
+                    () => BuildPreparedBackground(snapshotPngBytes, bitmap.Width, bitmap.Height, overlayLines),
+                    cancellationToken);
+            }
+        }
+        else
+        {
+            preparedBackgroundPngBytes = snapshotPngBytes;
+        }
+
+        return new ProcessedCaptureData(
+            recognizedPreview,
+            translationResult,
+            overlayLines,
+            preparedBackgroundPngBytes);
     }
 
     private void ShowTranslationPresentation(CaptureSessionResult sessionResult)
     {
         CloseExistingPresentation();
-
         if (sessionResult.OverlayLines.Count > 0 && sessionResult.SnapshotPngBytes.Length > 0)
         {
             _translationOverlayWindow = new TranslationOverlayWindow(sessionResult);
@@ -320,6 +424,11 @@ public partial class MainWindow : Window
         _translationResultWindow = new TranslationResultWindow(sessionResult);
         _translationResultWindow.Show();
         _translationResultWindow.PositionNear(sessionResult.Region);
+    }
+
+    private void LanguageCombo_SelectionChanged(object sender, RoutedEventArgs e)
+    {
+        _ = PreloadCurrentTranslationPairAsync();
     }
 
     private void InitializeTrayIcon()
@@ -345,25 +454,37 @@ public partial class MainWindow : Window
         Dispatcher.Invoke(ExitApplicationFromTray);
     }
 
-    private void SelectionOverlayWindow_Closed(object? sender, EventArgs e)
+    private void SelectionOverlayHost_Closed(object? sender, EventArgs e)
     {
-        if (sender is not SelectionOverlayWindow selector)
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.InvokeAsync(() => SelectionOverlayHost_Closed(sender, e));
+            return;
+        }
+
+        if (sender is not SelectionOverlayHost selector)
         {
             return;
         }
 
-        selector.Closed -= SelectionOverlayWindow_Closed;
-        selector.LanguageSelectionChanged -= SelectionOverlayWindow_LanguageSelectionChanged;
+        selector.Closed -= SelectionOverlayHost_Closed;
+        selector.LanguageSelectionChanged -= SelectionOverlayHost_LanguageSelectionChanged;
 
-        if (ReferenceEquals(_selectionOverlayWindow, selector))
+        if (ReferenceEquals(_selectionOverlayHost, selector))
         {
-            _selectionOverlayWindow = null;
+            _selectionOverlayHost = null;
         }
     }
 
-    private void SelectionOverlayWindow_LanguageSelectionChanged(object? sender, EventArgs e)
+    private void SelectionOverlayHost_LanguageSelectionChanged(object? sender, EventArgs e)
     {
-        if (sender is not SelectionOverlayWindow selector)
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.InvokeAsync(() => SelectionOverlayHost_LanguageSelectionChanged(sender, e));
+            return;
+        }
+
+        if (sender is not SelectionOverlayHost selector)
         {
             return;
         }
@@ -487,6 +608,7 @@ public partial class MainWindow : Window
             TargetLanguageCombo,
             TranslationLanguageCatalog.GetTargetLanguages(),
             targetLanguageCode ?? TranslationLanguageCatalog.GetDefaultTargetLanguage().Code);
+        _ = PreloadCurrentTranslationPairAsync();
     }
 
     private static void SetSelectedLanguageCode(
@@ -537,29 +659,77 @@ public partial class MainWindow : Window
         string? preferredOcrLanguageTag,
         string? sourceLanguage,
         string targetLanguage,
+        CapturePerformanceTrace performanceTrace,
         CancellationToken cancellationToken)
     {
         var overlayLines = new List<TranslatedOcrLine>();
-        var ocrSegments = _layoutSegmentationService.BuildSegments(ocrResult.Lines);
-        var automationSegments = _uiAutomationAssistPolicyService.ShouldUseUiAutomation(ocrSegments)
-            ? _uiAutomationTextService.GetSegments(captureRegion)
-            : Array.Empty<LayoutTextSegment>();
-        var fusedSegments = _layoutObservationFusionService.Merge(
-            ocrSegments,
-            automationSegments);
-        var visuallyRefinedSegments = _visualSegmentRefinementService.Refine(
-            fusedSegments,
-            snapshotBitmap);
-        var segments = await _segmentOcrRefinementService.RefineAsync(
-            visuallyRefinedSegments,
-            snapshotBitmap,
-            preferredOcrLanguageTag,
-            cancellationToken);
+        IReadOnlyList<LayoutTextSegment> ocrSegments;
+        using (performanceTrace.Measure(CapturePerformancePhase.LayoutSegmentation))
+        {
+            ocrSegments = await _backgroundProcessingWorker.ExecuteAsync(
+                () => _layoutSegmentationService.BuildSegments(ocrResult.Lines),
+                cancellationToken);
+        }
+
+        var processingMode = _captureProcessingModeClassifier.Classify(ocrSegments);
+        performanceTrace.SetProcessingMode(processingMode);
+
+        IReadOnlyList<LayoutTextSegment> automationSegments = Array.Empty<LayoutTextSegment>();
+        var shouldUseUiAutomation = processingMode == CaptureProcessingMode.UiDense
+                                    || (processingMode == CaptureProcessingMode.Mixed
+                                        && _uiAutomationAssistPolicyService.ShouldUseUiAutomation(ocrSegments));
+        if (shouldUseUiAutomation)
+        {
+            using (performanceTrace.Measure(CapturePerformancePhase.UiAutomationRead))
+            {
+                automationSegments = await _backgroundProcessingWorker.ExecuteAsync(
+                    () => _uiAutomationTextService.GetSegments(captureRegion),
+                    cancellationToken);
+            }
+        }
+
+        var fusedSegments = automationSegments.Count == 0
+            ? ocrSegments
+            : await _backgroundProcessingWorker.ExecuteAsync(
+                () => _layoutObservationFusionService.Merge(ocrSegments, automationSegments),
+                cancellationToken);
+
+        IReadOnlyList<LayoutTextSegment> visuallyRefinedSegments = fusedSegments;
+        if (processingMode != CaptureProcessingMode.DocumentLike)
+        {
+            using (performanceTrace.Measure(CapturePerformancePhase.VisualRefinement))
+            {
+                visuallyRefinedSegments = await _backgroundProcessingWorker.ExecuteAsync(
+                    () => _visualSegmentRefinementService.Refine(fusedSegments, snapshotBitmap, processingMode),
+                    cancellationToken);
+            }
+        }
+
+        IReadOnlyList<LayoutTextSegment> segments;
+        using (performanceTrace.Measure(CapturePerformancePhase.SegmentRefinement))
+        {
+            segments = await _segmentOcrRefinementService.RefineAsync(
+                visuallyRefinedSegments,
+                snapshotBitmap,
+                preferredOcrLanguageTag,
+                processingMode switch
+                {
+                    CaptureProcessingMode.DocumentLike => SegmentRefinementMode.DocumentLike,
+                    CaptureProcessingMode.UiDense => SegmentRefinementMode.UiDense,
+                    _ => SegmentRefinementMode.Mixed
+                },
+                performanceTrace,
+                cancellationToken);
+        }
+
         var cache = await PretranslatePlainSourceTextsAsync(
             segments,
             sourceLanguage,
             targetLanguage,
+            performanceTrace,
             cancellationToken);
+        var allowStyledTranslation = processingMode != CaptureProcessingMode.DocumentLike;
+        var allowUiRecovery = processingMode != CaptureProcessingMode.DocumentLike;
 
         foreach (var segment in segments)
         {
@@ -571,12 +741,17 @@ public partial class MainWindow : Window
             }
 
             SegmentTranslationResult translation;
-            var styledTranslation = await TryTranslateStyledSegmentAsync(
-                workingSegment,
-                snapshotBitmap,
-                sourceLanguage,
-                targetLanguage,
-                cancellationToken);
+            SegmentTranslationResult? styledTranslation = null;
+            if (allowStyledTranslation)
+            {
+                styledTranslation = await TryTranslateStyledSegmentAsync(
+                    workingSegment,
+                    snapshotBitmap,
+                    sourceLanguage,
+                    targetLanguage,
+                    performanceTrace,
+                    cancellationToken);
+            }
             if (styledTranslation is not null)
             {
                 translation = styledTranslation.Value;
@@ -589,6 +764,7 @@ public partial class MainWindow : Window
                         sourceText,
                         sourceLanguage,
                         targetLanguage,
+                        performanceTrace,
                         cancellationToken);
 
                     cache[sourceText] = translatedText;
@@ -602,17 +778,23 @@ public partial class MainWindow : Window
                 continue;
             }
 
-            if (workingSegment.Kind == TextLayoutKind.UiLabel
+            if (allowUiRecovery
+                && workingSegment.Kind == TextLayoutKind.UiLabel
                 && UiLabelTranslationRecoveryHeuristics.ShouldRetryAfterTranslation(
                     sourceText,
                     translation.TranslatedText,
-                    IsDenseUiRowSegment(workingSegment, segments)))
+                    _captureProcessingModeClassifier.IsDenseUiRowSegment(workingSegment, segments)))
             {
-                var recoveredSegment = await _segmentOcrRefinementService.RecoverLowConfidenceUiLabelAsync(
-                    workingSegment,
-                    snapshotBitmap,
-                    preferredOcrLanguageTag,
-                    cancellationToken);
+                LayoutTextSegment recoveredSegment;
+                using (performanceTrace.Measure(CapturePerformancePhase.UiLabelRecovery))
+                {
+                    recoveredSegment = await _segmentOcrRefinementService.RecoverLowConfidenceUiLabelAsync(
+                        workingSegment,
+                        snapshotBitmap,
+                        preferredOcrLanguageTag,
+                        performanceTrace,
+                        cancellationToken);
+                }
                 var recoveredSourceText = TextRegionIntelligence.NormalizeWhitespace(recoveredSegment.Text);
                 if (!string.IsNullOrWhiteSpace(recoveredSourceText)
                     && !string.Equals(recoveredSourceText, sourceText, StringComparison.OrdinalIgnoreCase))
@@ -626,6 +808,7 @@ public partial class MainWindow : Window
                             sourceText,
                             sourceLanguage,
                             targetLanguage,
+                            performanceTrace,
                             cancellationToken);
                         cache[sourceText] = recoveredTranslationText;
                     }
@@ -721,6 +904,7 @@ public partial class MainWindow : Window
         System.Drawing.Bitmap snapshotBitmap,
         string? sourceLanguage,
         string targetLanguage,
+        CapturePerformanceTrace performanceTrace,
         CancellationToken cancellationToken)
     {
         // Mixed inline styling inside long or multi-line paragraphs is too unstable with the
@@ -769,11 +953,16 @@ public partial class MainWindow : Window
             return null;
         }
 
-        var response = await _translationService.TranslateAsync(
-            markedSourceText,
-            effectiveSourceLanguage,
-            targetLanguage,
-            cancellationToken);
+        performanceTrace.Counters.IncrementTranslationRequests();
+        TranslationResponse response;
+        using (performanceTrace.Measure(CapturePerformancePhase.TranslationBatch))
+        {
+            response = await _translationService.TranslateAsync(
+                markedSourceText,
+                effectiveSourceLanguage,
+                targetLanguage,
+                cancellationToken);
+        }
         if (!TryParseStyledTranslatedRuns(response.TranslatedText, colorFragments, out var translatedText, out var inlineRuns))
         {
             return null;
@@ -1426,6 +1615,7 @@ public partial class MainWindow : Window
         string sourceText,
         string? sourceLanguage,
         string targetLanguage,
+        CapturePerformanceTrace performanceTrace,
         CancellationToken cancellationToken)
     {
         var normalized = TextRegionIntelligence.NormalizeWhitespace(sourceText);
@@ -1440,11 +1630,23 @@ public partial class MainWindow : Window
             return ApplySourceStyle(sourceText, normalized);
         }
 
-        var translatedText = (await _translationService.TranslateAsync(
+        if (_translationTextCache.TryGet(effectiveSourceLanguage, targetLanguage, normalized, out var cachedTranslatedText))
+        {
+            return PostProcessTranslatedText(sourceText, cachedTranslatedText);
+        }
+
+        performanceTrace.Counters.IncrementTranslationRequests();
+        TranslationResponse response;
+        using (performanceTrace.Measure(CapturePerformancePhase.TranslationBatch))
+        {
+            response = await _translationService.TranslateAsync(
                 normalized,
                 effectiveSourceLanguage,
                 targetLanguage,
-                cancellationToken)).TranslatedText;
+                cancellationToken);
+        }
+        var translatedText = response.TranslatedText;
+        _translationTextCache.Set(effectiveSourceLanguage, targetLanguage, normalized, translatedText);
 
         return PostProcessTranslatedText(sourceText, translatedText);
     }
@@ -1453,6 +1655,7 @@ public partial class MainWindow : Window
         IReadOnlyList<LayoutTextSegment> segments,
         string? sourceLanguage,
         string targetLanguage,
+        CapturePerformanceTrace performanceTrace,
         CancellationToken cancellationToken)
     {
         var translatedBySource = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -1479,6 +1682,12 @@ public partial class MainWindow : Window
                 continue;
             }
 
+            if (_translationTextCache.TryGet(effectiveSourceLanguage, targetLanguage, sourceText, out var cachedTranslatedText))
+            {
+                translatedBySource[sourceText] = PostProcessTranslatedText(sourceText, cachedTranslatedText);
+                continue;
+            }
+
             var languageKey = effectiveSourceLanguage ?? string.Empty;
             if (!pendingByLanguage.TryGetValue(languageKey, out var texts))
             {
@@ -1494,12 +1703,17 @@ public partial class MainWindow : Window
             var effectiveSourceLanguage = string.IsNullOrWhiteSpace(pendingGroup.Key)
                 ? null
                 : pendingGroup.Key;
-            var responses = await TranslationBatchCoordinator.TranslateAsync(
-                _translationService,
-                pendingGroup.Value,
-                effectiveSourceLanguage,
-                targetLanguage,
-                cancellationToken);
+            performanceTrace.Counters.IncrementTranslationRequests();
+            IReadOnlyList<TranslationResponse> responses;
+            using (performanceTrace.Measure(CapturePerformancePhase.TranslationBatch))
+            {
+                responses = await TranslationBatchCoordinator.TranslateAsync(
+                    _translationService,
+                    pendingGroup.Value,
+                    effectiveSourceLanguage,
+                    targetLanguage,
+                    cancellationToken);
+            }
 
             for (var index = 0; index < pendingGroup.Value.Count; index++)
             {
@@ -1507,6 +1721,7 @@ public partial class MainWindow : Window
                 var translatedText = index < responses.Count
                     ? responses[index].TranslatedText
                     : string.Empty;
+                _translationTextCache.Set(effectiveSourceLanguage, targetLanguage, sourceText, translatedText);
                 translatedBySource[sourceText] = PostProcessTranslatedText(sourceText, translatedText);
             }
         }
@@ -1518,6 +1733,7 @@ public partial class MainWindow : Window
         string sourceText,
         string? sourceLanguage,
         string targetLanguage,
+        CapturePerformanceTrace performanceTrace,
         CancellationToken cancellationToken)
     {
         var normalized = TextRegionIntelligence.NormalizeWhitespace(sourceText);
@@ -1530,11 +1746,25 @@ public partial class MainWindow : Window
                 "Перевод не требовался: язык источника совпал с целевым.");
         }
 
-        var response = await _translationService.TranslateAsync(
-            normalized,
-            effectiveSourceLanguage,
-            targetLanguage,
-            cancellationToken);
+        if (_translationTextCache.TryGet(effectiveSourceLanguage, targetLanguage, normalized, out var cachedTranslatedText))
+        {
+            return new TranslationResponse(
+                PostProcessTranslatedText(sourceText, cachedTranslatedText),
+                _translationService.DisplayName,
+                null);
+        }
+
+        performanceTrace.Counters.IncrementTranslationRequests();
+        TranslationResponse response;
+        using (performanceTrace.Measure(CapturePerformancePhase.TranslationBatch))
+        {
+            response = await _translationService.TranslateAsync(
+                normalized,
+                effectiveSourceLanguage,
+                targetLanguage,
+                cancellationToken);
+        }
+        _translationTextCache.Set(effectiveSourceLanguage, targetLanguage, normalized, response.TranslatedText);
 
         return new TranslationResponse(
             PostProcessTranslatedText(sourceText, response.TranslatedText),
@@ -1876,28 +2106,25 @@ public partial class MainWindow : Window
         _translationResultWindow = null;
     }
 
-    private void CloseSelectionOverlay()
+    private async Task CloseSelectionOverlayAsync()
     {
-        if (_selectionOverlayWindow is null)
+        if (_selectionOverlayHost is null)
         {
             return;
         }
 
-        var selector = _selectionOverlayWindow;
-        _selectionOverlayWindow = null;
+        var selector = _selectionOverlayHost;
+        _selectionOverlayHost = null;
 
-        selector.Closed -= SelectionOverlayWindow_Closed;
-        selector.LanguageSelectionChanged -= SelectionOverlayWindow_LanguageSelectionChanged;
-
-        if (selector.IsVisible)
-        {
-            selector.Close();
-        }
+        selector.Closed -= SelectionOverlayHost_Closed;
+        selector.LanguageSelectionChanged -= SelectionOverlayHost_LanguageSelectionChanged;
+        await selector.CloseAsync();
+        selector.Dispose();
     }
 
     private async Task PrepareForFreshCaptureAsync()
     {
-        CloseSelectionOverlay();
+        await CloseSelectionOverlayAsync();
         CloseExistingPresentation();
         await WaitForWindowsToDisappearAsync();
     }
@@ -1980,12 +2207,43 @@ public partial class MainWindow : Window
         catch
         {
         }
+
+        await PreloadCurrentTranslationPairAsync();
+    }
+
+    private async Task PreloadCurrentTranslationPairAsync()
+    {
+        if (_translationService is not ITranslationPairWarmupService pairWarmupService)
+        {
+            return;
+        }
+
+        var sourceLanguage = GetSelectedLanguageCode(SourceLanguageCombo);
+        var targetLanguage = GetSelectedLanguageCode(TargetLanguageCombo) ?? "ru";
+        if (string.Equals(sourceLanguage, _lastWarmedSourceLanguage, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(targetLanguage, _lastWarmedTargetLanguage, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _lastWarmedSourceLanguage = sourceLanguage;
+        _lastWarmedTargetLanguage = targetLanguage;
+
+        try
+        {
+            await pairWarmupService.WarmUpPairAsync(sourceLanguage, targetLanguage, CancellationToken.None);
+        }
+        catch
+        {
+        }
     }
 
     private void SwapTranslationService(ITranslationService newService)
     {
         DisposeTranslationService();
         _translationService = newService;
+        _lastWarmedSourceLanguage = null;
+        _lastWarmedTargetLanguage = null;
         _ = WarmUpTranslatorAsync();
     }
 
@@ -2036,5 +2294,11 @@ public partial class MainWindow : Window
     private readonly record struct OverlayBuildResult(
         IReadOnlyList<TranslatedOcrLine> Lines,
         string RecognizedPreview);
+
+    private readonly record struct ProcessedCaptureData(
+        string RecognizedPreview,
+        TranslationResponse Translation,
+        IReadOnlyList<TranslatedOcrLine> OverlayLines,
+        byte[] PreparedBackgroundPngBytes);
 
 }

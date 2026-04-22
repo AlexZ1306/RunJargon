@@ -30,7 +30,7 @@ public class VisualSegmentRefinementServiceTests
                 TextLayoutKind.TextLine)
         ];
 
-        var refined = _service.Refine(segments, bitmap);
+        var refined = _service.Refine(segments, bitmap, CaptureProcessingMode.UiDense);
 
         Assert.Equal(5, refined.Count);
         Assert.Collection(
@@ -60,7 +60,7 @@ public class VisualSegmentRefinementServiceTests
                 TextLayoutKind.Paragraph)
         ];
 
-        var refined = _service.Refine(segments, bitmap);
+        var refined = _service.Refine(segments, bitmap, CaptureProcessingMode.DocumentLike);
 
         var segment = Assert.Single(refined);
         Assert.Equal("This paragraph should remain one block", segment.Text);

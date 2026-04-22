@@ -11,9 +11,15 @@ public sealed class VisualSegmentRefinementService
 {
     public IReadOnlyList<LayoutTextSegment> Refine(
         IReadOnlyList<LayoutTextSegment> segments,
-        Bitmap snapshotBitmap)
+        Bitmap snapshotBitmap,
+        CaptureProcessingMode processingMode)
     {
         if (segments.Count == 0)
+        {
+            return segments;
+        }
+
+        if (processingMode == CaptureProcessingMode.DocumentLike)
         {
             return segments;
         }
@@ -27,7 +33,7 @@ public sealed class VisualSegmentRefinementService
         var refined = new List<LayoutTextSegment>(segments.Count);
         foreach (var segment in segments)
         {
-            var splitSegments = TrySplitSegment(segment, snapshot);
+            var splitSegments = TrySplitSegment(segment, snapshot, processingMode);
             if (splitSegments.Count == 0)
             {
                 refined.Add(segment);
@@ -45,9 +51,10 @@ public sealed class VisualSegmentRefinementService
 
     private static IReadOnlyList<LayoutTextSegment> TrySplitSegment(
         LayoutTextSegment segment,
-        Mat snapshot)
+        Mat snapshot,
+        CaptureProcessingMode processingMode)
     {
-        if (!ShouldAttemptSplit(segment))
+        if (!ShouldAttemptSplit(segment, processingMode))
         {
             return Array.Empty<LayoutTextSegment>();
         }
@@ -75,7 +82,7 @@ public sealed class VisualSegmentRefinementService
         return BuildSplitSegments(segment, cropBounds, labelBoxes);
     }
 
-    private static bool ShouldAttemptSplit(LayoutTextSegment segment)
+    private static bool ShouldAttemptSplit(LayoutTextSegment segment, CaptureProcessingMode processingMode)
     {
         if (segment.Kind == TextLayoutKind.Paragraph || segment.Bounds.IsEmpty || segment.SourceLines.Count != 1)
         {
@@ -95,6 +102,13 @@ public sealed class VisualSegmentRefinementService
         }
 
         if (segment.Bounds.Width < 80 || segment.Bounds.Height < 10)
+        {
+            return false;
+        }
+
+        if (processingMode == CaptureProcessingMode.Mixed
+            && segment.Kind != TextLayoutKind.UiLabel
+            && segment.Bounds.Height > 34)
         {
             return false;
         }

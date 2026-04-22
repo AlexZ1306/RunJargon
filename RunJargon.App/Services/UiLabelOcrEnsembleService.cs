@@ -22,6 +22,7 @@ public sealed class UiLabelOcrEnsembleService
         Bitmap snapshotBitmap,
         string? preferredLanguageTag,
         CancellationToken cancellationToken,
+        CapturePerformanceTrace? performanceTrace = null,
         bool allowDeepRecovery = false)
     {
         var originalText = TextRegionIntelligence.NormalizeWhitespace(segment.Text);
@@ -52,7 +53,7 @@ public sealed class UiLabelOcrEnsembleService
                         variant,
                         effectiveLanguageTag,
                         cancellationToken,
-                        new OcrRequestOptions(OcrExecutionProfile.UiLabelEnsemble));
+                        new OcrRequestOptions(OcrExecutionProfile.UiLabelEnsemble, performanceTrace));
                 }
                 catch
                 {
@@ -94,7 +95,7 @@ public sealed class UiLabelOcrEnsembleService
                         variant,
                         effectiveLanguageTag,
                         cancellationToken,
-                        new OcrRequestOptions(OcrExecutionProfile.UiLabelRecovery));
+                        new OcrRequestOptions(OcrExecutionProfile.UiLabelRecovery, performanceTrace));
                 }
                 catch
                 {

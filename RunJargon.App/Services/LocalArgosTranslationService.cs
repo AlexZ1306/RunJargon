@@ -6,7 +6,7 @@ using RunJargon.App.Models;
 
 namespace RunJargon.App.Services;
 
-public sealed class LocalArgosTranslationService : ITranslationService, IBatchTranslationService, IWarmableTranslationService, IDisposable
+public sealed class LocalArgosTranslationService : ITranslationService, IBatchTranslationService, IWarmableTranslationService, ITranslationPairWarmupService, IDisposable
 {
     private readonly string _pythonExecutable;
     private readonly string _scriptPath;
@@ -80,6 +80,17 @@ public sealed class LocalArgosTranslationService : ITranslationService, IBatchTr
     {
         await SendRequestAsync(
             new ArgosBridgeRequest("warmup", "Hello world", "en", "ru"),
+            cancellationToken);
+    }
+
+    public async Task WarmUpPairAsync(string? sourceLanguage, string targetLanguage, CancellationToken cancellationToken)
+    {
+        await SendRequestAsync(
+            new ArgosBridgeRequest(
+                "warmup",
+                "Hello world",
+                NormalizeSourceLanguage(sourceLanguage) ?? "en",
+                NormalizeTargetLanguage(targetLanguage) ?? "ru"),
             cancellationToken);
     }
 

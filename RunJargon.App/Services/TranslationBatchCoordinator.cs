@@ -9,30 +9,68 @@ public static class TranslationBatchCoordinator
         IReadOnlyList<string> texts,
         string? sourceLanguage,
         string targetLanguage,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ITranslationTextCache? cache = null)
     {
         if (texts.Count == 0)
         {
             return Array.Empty<TranslationResponse>();
         }
 
-        if (translationService is IBatchTranslationService batchTranslationService)
-        {
-            return await batchTranslationService.TranslateBatchAsync(
-                texts,
-                sourceLanguage,
-                targetLanguage,
-                cancellationToken);
-        }
-
         var results = new TranslationResponse[texts.Count];
+        var missingTexts = new List<string>();
+        var missingIndexes = new List<int>();
+
         for (var index = 0; index < texts.Count; index++)
         {
-            results[index] = await translationService.TranslateAsync(
-                texts[index],
+            var normalizedText = texts[index];
+            if (cache is not null
+                && cache.TryGet(sourceLanguage, targetLanguage, normalizedText, out var cachedTranslatedText))
+            {
+                results[index] = new TranslationResponse(cachedTranslatedText, translationService.DisplayName, null);
+                continue;
+            }
+
+            missingTexts.Add(normalizedText);
+            missingIndexes.Add(index);
+        }
+
+        if (missingTexts.Count == 0)
+        {
+            return results;
+        }
+
+        if (translationService is IBatchTranslationService batchTranslationService)
+        {
+            var batchResponses = await batchTranslationService.TranslateBatchAsync(
+                missingTexts,
                 sourceLanguage,
                 targetLanguage,
                 cancellationToken);
+
+            for (var index = 0; index < missingIndexes.Count; index++)
+            {
+                var sourceIndex = missingIndexes[index];
+                var response = index < batchResponses.Count
+                    ? batchResponses[index]
+                    : new TranslationResponse(string.Empty, translationService.DisplayName, null);
+                results[sourceIndex] = response;
+                cache?.Set(sourceLanguage, targetLanguage, texts[sourceIndex], response.TranslatedText);
+            }
+
+            return results;
+        }
+
+        for (var index = 0; index < missingIndexes.Count; index++)
+        {
+            var sourceIndex = missingIndexes[index];
+            var response = await translationService.TranslateAsync(
+                texts[sourceIndex],
+                sourceLanguage,
+                targetLanguage,
+                cancellationToken);
+            results[sourceIndex] = response;
+            cache?.Set(sourceLanguage, targetLanguage, texts[sourceIndex], response.TranslatedText);
         }
 
         return results;
