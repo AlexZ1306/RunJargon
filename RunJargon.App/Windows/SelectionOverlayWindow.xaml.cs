@@ -55,15 +55,18 @@ public partial class SelectionOverlayWindow : Window
             _initialTargetLanguageCode,
             recognizedTextToCopy,
             translatedTextToCopy);
+        CaptureToolbar.SetSelectionActive(true);
         CaptureToolbar.SetBusy(false);
 
         Loaded += SelectionOverlayWindow_Loaded;
         Closed += SelectionOverlayWindow_Closed;
         CaptureToolbar.CloseRequested += CaptureToolbar_CloseRequested;
         CaptureToolbar.LanguageSelectionChanged += CaptureToolbar_LanguageSelectionChanged;
+        CaptureToolbar.SelectAreaRequested += CaptureToolbar_SelectAreaRequested;
     }
 
     public event EventHandler? LanguageSelectionChanged;
+    public event EventHandler? SelectAreaRequested;
 
     public ScreenRegion? SelectedRegion { get; private set; }
 
@@ -142,7 +145,7 @@ public partial class SelectionOverlayWindow : Window
                 Math.Max(1, (int)Math.Ceiling(region.Width)),
                 Math.Max(1, (int)Math.Ceiling(region.Height)))).Bounds;
 
-        var toolbarWidth = CaptureToolbar.Width > 0 ? CaptureToolbar.Width : 617d;
+        var toolbarWidth = CaptureToolbar.Width > 0 ? CaptureToolbar.Width : 643d;
         var toolbarHeight = CaptureToolbar.Height > 0 ? CaptureToolbar.Height : 46d;
 
         Left = screenBounds.Left + Math.Max(0, (screenBounds.Width - toolbarWidth) / 2d);
@@ -161,6 +164,7 @@ public partial class SelectionOverlayWindow : Window
         CaptureToolbar.Visibility = Visibility.Visible;
         Canvas.SetLeft(CaptureToolbar, 0);
         Canvas.SetTop(CaptureToolbar, 0);
+        CaptureToolbar.SetSelectionActive(false);
         CaptureToolbar.SetBusy(isBusy);
 
         if (!IsVisible)
@@ -184,6 +188,7 @@ public partial class SelectionOverlayWindow : Window
         Mouse.Capture(null);
         CaptureToolbar.CloseRequested -= CaptureToolbar_CloseRequested;
         CaptureToolbar.LanguageSelectionChanged -= CaptureToolbar_LanguageSelectionChanged;
+        CaptureToolbar.SelectAreaRequested -= CaptureToolbar_SelectAreaRequested;
         _selectionTcs.TrySetResult(null);
     }
 
@@ -196,6 +201,11 @@ public partial class SelectionOverlayWindow : Window
     private void CaptureToolbar_LanguageSelectionChanged(object? sender, EventArgs e)
     {
         LanguageSelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void CaptureToolbar_SelectAreaRequested(object? sender, EventArgs e)
+    {
+        SelectAreaRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void RootCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -282,7 +292,7 @@ public partial class SelectionOverlayWindow : Window
 
     private void PositionCaptureToolbar()
     {
-        var toolbarWidth = CaptureToolbar.Width > 0 ? CaptureToolbar.Width : 617d;
+        var toolbarWidth = CaptureToolbar.Width > 0 ? CaptureToolbar.Width : 643d;
         var screen = Forms.Screen.FromPoint(Forms.Cursor.Position);
         var relativeScreenLeft = screen.Bounds.Left - Left;
         var relativeScreenTop = screen.Bounds.Top - Top;

@@ -25,6 +25,7 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
     private string _recognizedTextToCopy = string.Empty;
     private string _translatedTextToCopy = string.Empty;
     private bool _isBusy;
+    private bool _isSelectionActive = true;
 
     public CaptureSelectionToolbar()
     {
@@ -44,6 +45,7 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
 
     public event EventHandler? CloseRequested;
     public event EventHandler? LanguageSelectionChanged;
+    public event EventHandler? SelectAreaRequested;
 
     public void UpdateCopyTexts(string recognizedTextToCopy, string translatedTextToCopy)
     {
@@ -61,6 +63,17 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
 
         _isBusy = isBusy;
         ApplyBusyVisualState();
+    }
+
+    public void SetSelectionActive(bool isSelectionActive)
+    {
+        if (_isSelectionActive == isSelectionActive)
+        {
+            return;
+        }
+
+        _isSelectionActive = isSelectionActive;
+        UpdateSelectAreaButtonState();
     }
 
     public void Configure(
@@ -92,6 +105,7 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
         RebuildMenuButtons();
         UpdateCopyButtonStates();
         UpdateSwapButtonState();
+        UpdateSelectAreaButtonState();
         ApplyBusyVisualState();
     }
 
@@ -147,6 +161,18 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
     private void CloseToolbarButton_Click(object sender, RoutedEventArgs e)
     {
         CloseRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void SelectAreaButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy || _isSelectionActive)
+        {
+            return;
+        }
+
+        _isSelectionActive = true;
+        UpdateSelectAreaButtonState();
+        SelectAreaRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void RebuildMenuButtons()
@@ -254,6 +280,15 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
         SwapLanguagesButton.Opacity = 1;
     }
 
+    private void UpdateSelectAreaButtonState()
+    {
+        SelectAreaButton.IsEnabled = !_isBusy;
+        SelectAreaButton.Tag = _isSelectionActive;
+        SelectAreaButton.Cursor = _isBusy
+            ? System.Windows.Input.Cursors.Arrow
+            : System.Windows.Input.Cursors.Hand;
+    }
+
     private bool CanSwapLanguages()
     {
         if (string.IsNullOrWhiteSpace(SelectedSourceLanguageCode)
@@ -304,5 +339,6 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
 
         UpdateCopyButtonStates();
         UpdateSwapButtonState();
+        UpdateSelectAreaButtonState();
     }
 }

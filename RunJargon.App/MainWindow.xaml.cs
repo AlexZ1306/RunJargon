@@ -321,6 +321,7 @@ public partial class MainWindow : Window
             _lastTranslatedTextForCopy);
         selector.Closed += SelectionOverlayHost_Closed;
         selector.LanguageSelectionChanged += SelectionOverlayHost_LanguageSelectionChanged;
+        selector.SelectAreaRequested += SelectionOverlayHost_SelectAreaRequested;
         _selectionOverlayHost = selector;
         await selector.StartAsync();
 
@@ -334,6 +335,7 @@ public partial class MainWindow : Window
             _selectionOverlayHost = null;
             selector.Closed -= SelectionOverlayHost_Closed;
             selector.LanguageSelectionChanged -= SelectionOverlayHost_LanguageSelectionChanged;
+            selector.SelectAreaRequested -= SelectionOverlayHost_SelectAreaRequested;
             selector.Dispose();
         }
 
@@ -469,6 +471,7 @@ public partial class MainWindow : Window
 
         selector.Closed -= SelectionOverlayHost_Closed;
         selector.LanguageSelectionChanged -= SelectionOverlayHost_LanguageSelectionChanged;
+        selector.SelectAreaRequested -= SelectionOverlayHost_SelectAreaRequested;
 
         if (ReferenceEquals(_selectionOverlayHost, selector))
         {
@@ -492,6 +495,17 @@ public partial class MainWindow : Window
         ApplyLanguageSelection(
             selector.SelectedSourceLanguageCode,
             selector.SelectedTargetLanguageCode);
+    }
+
+    private async void SelectionOverlayHost_SelectAreaRequested(object? sender, EventArgs e)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.InvokeAsync(() => SelectionOverlayHost_SelectAreaRequested(sender, e));
+            return;
+        }
+
+        await RunCaptureFlowAsync(forcePickNewRegion: true);
     }
 
     private void HideToTray(bool showBalloonTip)
@@ -2118,6 +2132,7 @@ public partial class MainWindow : Window
 
         selector.Closed -= SelectionOverlayHost_Closed;
         selector.LanguageSelectionChanged -= SelectionOverlayHost_LanguageSelectionChanged;
+        selector.SelectAreaRequested -= SelectionOverlayHost_SelectAreaRequested;
         await selector.CloseAsync();
         selector.Dispose();
     }

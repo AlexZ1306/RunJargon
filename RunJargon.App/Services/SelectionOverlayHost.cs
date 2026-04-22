@@ -57,6 +57,7 @@ public sealed class SelectionOverlayHost : IDisposable
 
     public event EventHandler? Closed;
     public event EventHandler? LanguageSelectionChanged;
+    public event EventHandler? SelectAreaRequested;
 
     public Task StartAsync()
     {
@@ -200,6 +201,7 @@ public sealed class SelectionOverlayHost : IDisposable
             UpdateSelectedLanguages(window);
 
             window.LanguageSelectionChanged += Window_LanguageSelectionChanged;
+            window.SelectAreaRequested += Window_SelectAreaRequested;
             window.Closed += Window_Closed;
 
             var selectionTask = window.WaitForSelectionAsync();
@@ -249,12 +251,18 @@ public sealed class SelectionOverlayHost : IDisposable
         LanguageSelectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    private void Window_SelectAreaRequested(object? sender, EventArgs e)
+    {
+        SelectAreaRequested?.Invoke(this, EventArgs.Empty);
+    }
+
     private void Window_Closed(object? sender, EventArgs e)
     {
         if (sender is SelectionOverlayWindow window)
         {
             UpdateSelectedLanguages(window);
             window.LanguageSelectionChanged -= Window_LanguageSelectionChanged;
+            window.SelectAreaRequested -= Window_SelectAreaRequested;
             window.Closed -= Window_Closed;
         }
 
