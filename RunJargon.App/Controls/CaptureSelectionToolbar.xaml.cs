@@ -26,6 +26,8 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
     private string _translatedTextToCopy = string.Empty;
     private bool _isBusy;
     private bool _isSelectionActive = true;
+    private bool _isSelectAreaPointerOver;
+    private bool _isSelectAreaPressed;
 
     public CaptureSelectionToolbar()
     {
@@ -175,6 +177,31 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
         SelectAreaRequested?.Invoke(this, EventArgs.Empty);
     }
 
+    private void SelectAreaButton_MouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        _isSelectAreaPointerOver = true;
+        UpdateSelectAreaButtonState();
+    }
+
+    private void SelectAreaButton_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        _isSelectAreaPointerOver = false;
+        _isSelectAreaPressed = false;
+        UpdateSelectAreaButtonState();
+    }
+
+    private void SelectAreaButton_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        _isSelectAreaPressed = true;
+        UpdateSelectAreaButtonState();
+    }
+
+    private void SelectAreaButton_PreviewMouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        _isSelectAreaPressed = false;
+        UpdateSelectAreaButtonState();
+    }
+
     private void RebuildMenuButtons()
     {
         BuildMenu(
@@ -283,10 +310,13 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
     private void UpdateSelectAreaButtonState()
     {
         SelectAreaButton.IsEnabled = !_isBusy;
-        SelectAreaButton.Tag = _isSelectionActive;
         SelectAreaButton.Cursor = _isBusy
             ? System.Windows.Input.Cursors.Arrow
             : System.Windows.Input.Cursors.Hand;
+        SelectAreaButton.Foreground = CreateIconBrush(
+            _isSelectAreaPressed
+                ? "#3D7CA9"
+                : (_isSelectionActive || _isSelectAreaPointerOver ? "#63AADE" : "#C7C7C7"));
     }
 
     private bool CanSwapLanguages()
@@ -340,5 +370,10 @@ public partial class CaptureSelectionToolbar : System.Windows.Controls.UserContr
         UpdateCopyButtonStates();
         UpdateSwapButtonState();
         UpdateSelectAreaButtonState();
+    }
+
+    private static Brush CreateIconBrush(string colorHex)
+    {
+        return new SolidColorBrush((Color)ColorConverter.ConvertFromString(colorHex));
     }
 }

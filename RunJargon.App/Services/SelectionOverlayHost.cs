@@ -1,6 +1,6 @@
 using System.Windows.Threading;
+using Forms = System.Windows.Forms;
 using RunJargon.App.Models;
-using RunJargon.App.Utilities;
 using RunJargon.App.Windows;
 
 namespace RunJargon.App.Services;
@@ -14,14 +14,14 @@ public sealed class SelectionOverlayHost : IDisposable
     private readonly string _recognizedTextToCopy;
     private readonly string _translatedTextToCopy;
     private readonly Thread _thread;
-    private readonly TaskCompletionSource<SelectionOverlayWindow> _windowTcs =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly TaskCompletionSource<ScreenRegion?> _selectionTcs =
+    private readonly TaskCompletionSource<SelectionToolbarWindow> _toolbarWindowTcs =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource<object?> _shutdownTcs =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private Dispatcher? _dispatcher;
+    private SelectionOverlayWindow? _selectionSurfaceWindow;
+    private Task<ScreenRegion?>? _currentSelectionTask;
     private bool _disposed;
     private bool _isClosed;
 
@@ -63,44 +63,73 @@ public sealed class SelectionOverlayHost : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         _thread.Start();
-        return _windowTcs.Task;
+        return _toolbarWindowTcs.Task;
+    }
+
+    public async Task BeginSelectionAsync()
+    {
+        await InvokeOnToolbarAsync(toolbar =>
+        {
+            toolbar.SetBusy(false);
+            toolbar.SetSelectionActive(true);
+            toolbar.PositionOnScreen(Forms.Screen.FromPoint(Forms.Cursor.Position));
+            return Task.CompletedTask;
+        }).ConfigureAwait(false);
+
+        var dispatcher = _dispatcher;
+        if (dispatcher is null || _isClosed)
+        {
+            throw new ObjectDisposedException(nameof(SelectionOverlayHost));
+        }
+
+        await dispatcher.InvokeAsync(StartSelectionSurfaceCore).Task.ConfigureAwait(false);
     }
 
     public async Task<ScreenRegion?> WaitForSelectionAsync()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        await _windowTcs.Task.ConfigureAwait(false);
-        return await _selectionTcs.Task.ConfigureAwait(false);
+        if (_currentSelectionTask is null)
+        {
+            return null;
+        }
+
+        return await _currentSelectionTask.ConfigureAwait(false);
     }
 
-    public async Task PrepareForCleanCaptureAsync()
+    public Task PrepareForCleanCaptureAsync()
     {
-        await InvokeOnWindowAsync(window => window.PrepareForCleanCaptureAsync()).ConfigureAwait(false);
+        return Task.CompletedTask;
     }
 
     public async Task ShowToolbarOnlyAsync(bool isBusy)
     {
-        await InvokeOnWindowAsync(window =>
+        await InvokeOnToolbarAsync(toolbar =>
         {
-            window.ShowToolbarOnly(isBusy);
+            toolbar.SetSelectionActive(false);
+            toolbar.SetBusy(isBusy);
             return Task.CompletedTask;
         }).ConfigureAwait(false);
     }
 
     public async Task SetBusyAsync(bool isBusy)
     {
-        await InvokeOnWindowAsync(window =>
+        await InvokeOnToolbarAsync(toolbar =>
         {
-            window.SetBusy(isBusy);
+            toolbar.SetBusy(isBusy);
+            if (!isBusy)
+            {
+                toolbar.SetSelectionActive(false);
+            }
+
             return Task.CompletedTask;
         }).ConfigureAwait(false);
     }
 
     public async Task UpdateCopyTextsAsync(string recognizedTextToCopy, string translatedTextToCopy)
     {
-        await InvokeOnWindowAsync(window =>
+        await InvokeOnToolbarAsync(toolbar =>
         {
-            window.UpdateCopyTexts(recognizedTextToCopy, translatedTextToCopy);
+            toolbar.UpdateCopyTexts(recognizedTextToCopy, translatedTextToCopy);
             return Task.CompletedTask;
         }).ConfigureAwait(false);
     }
@@ -112,10 +141,10 @@ public sealed class SelectionOverlayHost : IDisposable
             return;
         }
 
-        SelectionOverlayWindow? window = null;
+        SelectionToolbarWindow toolbarWindow;
         try
         {
-            window = await _windowTcs.Task.ConfigureAwait(false);
+            toolbarWindow = await _toolbarWindowTcs.Task.ConfigureAwait(false);
         }
         catch
         {
@@ -136,9 +165,15 @@ public sealed class SelectionOverlayHost : IDisposable
                 return;
             }
 
-            if (window.IsVisible)
+            if (_selectionSurfaceWindow is not null)
             {
-                window.Close();
+                _selectionSurfaceWindow.Close();
+                _selectionSurfaceWindow = null;
+            }
+
+            if (toolbarWindow.IsVisible)
+            {
+                toolbarWindow.Close();
             }
             else
             {
@@ -160,17 +195,17 @@ public sealed class SelectionOverlayHost : IDisposable
         _disposed = true;
     }
 
-    private async Task InvokeOnWindowAsync(Func<SelectionOverlayWindow, Task> operation)
+    private async Task InvokeOnToolbarAsync(Func<SelectionToolbarWindow, Task> operation)
     {
         if (_disposed)
         {
             return;
         }
 
-        SelectionOverlayWindow window;
+        SelectionToolbarWindow toolbarWindow;
         try
         {
-            window = await _windowTcs.Task.ConfigureAwait(false);
+            toolbarWindow = await _toolbarWindowTcs.Task.ConfigureAwait(false);
         }
         catch
         {
@@ -183,7 +218,7 @@ public sealed class SelectionOverlayHost : IDisposable
             return;
         }
 
-        await dispatcher.InvokeAsync(() => operation(window)).Task.Unwrap().ConfigureAwait(false);
+        await dispatcher.InvokeAsync(() => operation(toolbarWindow)).Task.Unwrap().ConfigureAwait(false);
     }
 
     private void ThreadMain()
@@ -191,48 +226,27 @@ public sealed class SelectionOverlayHost : IDisposable
         try
         {
             _dispatcher = Dispatcher.CurrentDispatcher;
-            var window = new SelectionOverlayWindow(
+            var toolbarWindow = new SelectionToolbarWindow(
                 _sourceLanguages,
                 _targetLanguages,
                 _selectedSourceLanguageCode,
                 _selectedTargetLanguageCode,
                 _recognizedTextToCopy,
                 _translatedTextToCopy);
-            UpdateSelectedLanguages(window);
+            UpdateSelectedLanguages(toolbarWindow);
 
-            window.LanguageSelectionChanged += Window_LanguageSelectionChanged;
-            window.SelectAreaRequested += Window_SelectAreaRequested;
-            window.Closed += Window_Closed;
+            toolbarWindow.LanguageSelectionChanged += ToolbarWindow_LanguageSelectionChanged;
+            toolbarWindow.SelectAreaRequested += ToolbarWindow_SelectAreaRequested;
+            toolbarWindow.CloseRequested += ToolbarWindow_CloseRequested;
+            toolbarWindow.Closed += ToolbarWindow_Closed;
 
-            var selectionTask = window.WaitForSelectionAsync();
-            selectionTask.ContinueWith(
-                task =>
-                {
-                    if (task.IsCanceled)
-                    {
-                        _selectionTcs.TrySetCanceled();
-                    }
-                    else if (task.IsFaulted)
-                    {
-                        _selectionTcs.TrySetException(task.Exception!.InnerExceptions);
-                    }
-                    else
-                    {
-                        _selectionTcs.TrySetResult(task.Result);
-                    }
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-
-            _windowTcs.TrySetResult(window);
-            window.Show();
+            _toolbarWindowTcs.TrySetResult(toolbarWindow);
+            toolbarWindow.Show();
             Dispatcher.Run();
         }
         catch (Exception ex)
         {
-            _windowTcs.TrySetException(ex);
-            _selectionTcs.TrySetException(ex);
+            _toolbarWindowTcs.TrySetException(ex);
         }
         finally
         {
@@ -240,30 +254,84 @@ public sealed class SelectionOverlayHost : IDisposable
         }
     }
 
-    private void Window_LanguageSelectionChanged(object? sender, EventArgs e)
+    private void StartSelectionSurfaceCore()
     {
-        if (sender is not SelectionOverlayWindow window)
+        if (_selectionSurfaceWindow is not null)
         {
             return;
         }
 
-        UpdateSelectedLanguages(window);
+        var selectionSurface = new SelectionOverlayWindow(
+            Array.Empty<TranslationLanguageOption>(),
+            Array.Empty<TranslationLanguageOption>(),
+            null,
+            null,
+            string.Empty,
+            string.Empty,
+            showToolbar: false);
+        _selectionSurfaceWindow = selectionSurface;
+        _currentSelectionTask = selectionSurface.WaitForSelectionAsync();
+        _currentSelectionTask.ContinueWith(
+            task =>
+            {
+                var dispatcher = _dispatcher;
+                if (dispatcher is null)
+                {
+                    return;
+                }
+
+                dispatcher.Invoke(() =>
+                {
+                    _selectionSurfaceWindow = null;
+
+                    if (task.IsCompletedSuccessfully && task.Result is ScreenRegion region)
+                    {
+                        var toolbarWindow = _toolbarWindowTcs.Task.Result;
+                        toolbarWindow.PositionForRegion(region);
+                        toolbarWindow.SetSelectionActive(false);
+                        return;
+                    }
+
+                    _ = CloseAsync();
+                });
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        selectionSurface.Show();
+        _toolbarWindowTcs.Task.Result.BringToFront();
+    }
+
+    private void ToolbarWindow_LanguageSelectionChanged(object? sender, EventArgs e)
+    {
+        if (sender is not SelectionToolbarWindow toolbarWindow)
+        {
+            return;
+        }
+
+        UpdateSelectedLanguages(toolbarWindow);
         LanguageSelectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private void Window_SelectAreaRequested(object? sender, EventArgs e)
+    private void ToolbarWindow_SelectAreaRequested(object? sender, EventArgs e)
     {
         SelectAreaRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    private void Window_Closed(object? sender, EventArgs e)
+    private void ToolbarWindow_CloseRequested(object? sender, EventArgs e)
     {
-        if (sender is SelectionOverlayWindow window)
+        _ = CloseAsync();
+    }
+
+    private void ToolbarWindow_Closed(object? sender, EventArgs e)
+    {
+        if (sender is SelectionToolbarWindow toolbarWindow)
         {
-            UpdateSelectedLanguages(window);
-            window.LanguageSelectionChanged -= Window_LanguageSelectionChanged;
-            window.SelectAreaRequested -= Window_SelectAreaRequested;
-            window.Closed -= Window_Closed;
+            UpdateSelectedLanguages(toolbarWindow);
+            toolbarWindow.LanguageSelectionChanged -= ToolbarWindow_LanguageSelectionChanged;
+            toolbarWindow.SelectAreaRequested -= ToolbarWindow_SelectAreaRequested;
+            toolbarWindow.CloseRequested -= ToolbarWindow_CloseRequested;
+            toolbarWindow.Closed -= ToolbarWindow_Closed;
         }
 
         _isClosed = true;
@@ -276,9 +344,9 @@ public sealed class SelectionOverlayHost : IDisposable
         }
     }
 
-    private void UpdateSelectedLanguages(SelectionOverlayWindow window)
+    private void UpdateSelectedLanguages(SelectionToolbarWindow toolbarWindow)
     {
-        SelectedSourceLanguageCode = window.SelectedSourceLanguageCode;
-        SelectedTargetLanguageCode = window.SelectedTargetLanguageCode;
+        SelectedSourceLanguageCode = toolbarWindow.SelectedSourceLanguageCode;
+        SelectedTargetLanguageCode = toolbarWindow.SelectedTargetLanguageCode;
     }
 }

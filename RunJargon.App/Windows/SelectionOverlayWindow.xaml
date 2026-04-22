@@ -21,7 +21,7 @@
                    Width="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=Window}}"
                    Height="{Binding ActualHeight, RelativeSource={RelativeSource AncestorType=Window}}"
                    IsHitTestVisible="False"
-                   Fill="#26000000" />
+                   Fill="#37000000" />
 
         <Border x:Name="SelectionBorder"
                 IsHitTestVisible="False"

@@ -1,0 +1,17 @@
+<Window x:Class="RunJargon.App.Windows.SelectionToolbarWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:RunJargon.App.Controls"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        AllowsTransparency="True"
+        ShowInTaskbar="False"
+        ShowActivated="True"
+        Topmost="True"
+        Background="Transparent"
+        Width="643"
+        Height="46">
+    <Grid Background="Transparent">
+        <controls:CaptureSelectionToolbar x:Name="CaptureToolbar" />
+    </Grid>
+</Window>

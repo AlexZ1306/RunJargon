@@ -148,12 +148,14 @@ public partial class MainWindow : Window
             return;
         }
 
+        var preserveSelectionOverlay = forcePickNewRegion && _selectionOverlayHost is not null;
+
         try
         {
             _isBusy = true;
             CaptureAreaButton.IsEnabled = false;
             RepeatLastAreaButton.IsEnabled = false;
-            await PrepareForFreshCaptureAsync();
+            await PrepareForFreshCaptureAsync(preserveSelectionOverlay);
 
             ScreenRegion? region = forcePickNewRegion ? await PickRegionAsync() : _lastCapturedRegion;
             if (region is null)
@@ -312,6 +314,12 @@ public partial class MainWindow : Window
     {
         await Task.Yield();
 
+        if (_selectionOverlayHost is not null)
+        {
+            await _selectionOverlayHost.BeginSelectionAsync();
+            return await _selectionOverlayHost.WaitForSelectionAsync();
+        }
+
         var selector = new SelectionOverlayHost(
             TranslationLanguageCatalog.GetSourceLanguages(),
             TranslationLanguageCatalog.GetTargetLanguages(),
@@ -324,6 +332,7 @@ public partial class MainWindow : Window
         selector.SelectAreaRequested += SelectionOverlayHost_SelectAreaRequested;
         _selectionOverlayHost = selector;
         await selector.StartAsync();
+        await selector.BeginSelectionAsync();
 
         var region = await selector.WaitForSelectionAsync();
         ApplyLanguageSelection(
@@ -2137,9 +2146,13 @@ public partial class MainWindow : Window
         selector.Dispose();
     }
 
-    private async Task PrepareForFreshCaptureAsync()
+    private async Task PrepareForFreshCaptureAsync(bool preserveSelectionOverlay = false)
     {
-        await CloseSelectionOverlayAsync();
+        if (!preserveSelectionOverlay)
+        {
+            await CloseSelectionOverlayAsync();
+        }
+
         CloseExistingPresentation();
         await WaitForWindowsToDisappearAsync();
     }

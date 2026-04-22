@@ -9,7 +9,7 @@
              UseLayoutRounding="True">
     <UserControl.Resources>
         <DataTemplate x:Key="SelectAreaIconTemplate">
-            <Viewbox Width="16" Height="16">
+            <Viewbox Width="17" Height="17">
                 <Canvas Width="16.5" Height="16.5">
                     <Path Data="M14.25 0.25H10.25V1.25H14.25C14.802 1.25 15.25 1.698 15.25 2.25V6.25H16.25V2.25C16.25 1.1455 15.3545 0.25 14.25 0.25ZM15.25 14.25C15.25 14.802 14.802 15.25 14.25 15.25H10.25V16.25H14.25C15.3545 16.25 16.25 15.3545 16.25 14.25V10.25H15.25V14.25ZM1.25 14.25V10.25H0.25V14.25C0.25 15.3545 1.1455 16.25 2.25 16.25H6.25V15.25H2.25C1.698 15.25 1.25 14.802 1.25 14.25ZM0.25 2.25V6.25H1.25V2.25C1.25 1.698 1.698 1.25 2.25 1.25H6.25V0.25H2.25C1.1455 0.25 0.25 1.1455 0.25 2.25Z"
                           Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
@@ -110,22 +110,9 @@
         </Style>
 
         <Style x:Key="SelectAreaIconButtonStyle"
-               BasedOn="{StaticResource AccentIconButtonStyle}"
+               BasedOn="{StaticResource BaseIconButtonStyle}"
                TargetType="Button">
             <Style.Triggers>
-                <Trigger Property="Tag" Value="True">
-                    <Setter Property="Foreground" Value="#63AADE" />
-                </Trigger>
-                <MultiTrigger>
-                    <MultiTrigger.Conditions>
-                        <Condition Property="Tag" Value="True" />
-                        <Condition Property="IsEnabled" Value="True" />
-                    </MultiTrigger.Conditions>
-                    <Setter Property="Foreground" Value="#63AADE" />
-                </MultiTrigger>
-                <Trigger Property="IsPressed" Value="True">
-                    <Setter Property="Foreground" Value="#3D7CA9" />
-                </Trigger>
             </Style.Triggers>
         </Style>
 
@@ -148,11 +135,11 @@
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="HasDropShadow" Value="False" />
             <Setter Property="FontFamily" Value="Inter" />
-            <Setter Property="FontSize" Value="10.125" />
+            <Setter Property="FontSize" Value="11.65" />
             <Setter Property="FontWeight" Value="Medium" />
-            <Setter Property="Padding" Value="14,6" />
+            <Setter Property="Padding" Value="16,7" />
             <Setter Property="HorizontalOffset" Value="0" />
-            <Setter Property="VerticalOffset" Value="10" />
+            <Setter Property="VerticalOffset" Value="18" />
             <Setter Property="Placement" Value="Bottom" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -379,16 +366,28 @@
                   Height="44"
                   HorizontalAlignment="Center"
                   VerticalAlignment="Top">
-                <Canvas Width="182"
-                        Height="44"
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Center">
+                <Grid Width="160"
+                      Height="44"
+                      HorizontalAlignment="Center"
+                      VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="40" />
+                        <ColumnDefinition Width="40" />
+                        <ColumnDefinition Width="40" />
+                        <ColumnDefinition Width="40" />
+                    </Grid.ColumnDefinitions>
+
                     <Button x:Name="SelectAreaButton"
-                            Width="16"
-                            Height="16"
-                            Canvas.Left="16"
-                            Canvas.Top="14"
+                            Grid.Column="0"
+                            Width="18"
+                            Height="18"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
                             Click="SelectAreaButton_Click"
+                            MouseEnter="SelectAreaButton_MouseEnter"
+                            MouseLeave="SelectAreaButton_MouseLeave"
+                            PreviewMouseLeftButtonDown="SelectAreaButton_PreviewMouseLeftButtonDown"
+                            PreviewMouseLeftButtonUp="SelectAreaButton_PreviewMouseLeftButtonUp"
                             Style="{StaticResource SelectAreaIconButtonStyle}">
                         <Button.ToolTip>
                             <ToolTip Style="{StaticResource ToolbarToolTipStyle}"
@@ -398,80 +397,87 @@
                     </Button>
 
                     <Button x:Name="CopyOriginalButton"
+                            Grid.Column="1"
                             Width="18"
                             Height="18"
-                            Canvas.Left="51"
-                            Canvas.Top="13"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
                             Click="CopyOriginalButton_Click"
                             Style="{StaticResource AccentIconButtonStyle}">
                         <Button.ToolTip>
                             <ToolTip Style="{StaticResource ToolbarToolTipStyle}"
                                      Content="Копировать исходный текст" />
                         </Button.ToolTip>
-                        <Canvas Width="18"
-                                Height="18">
-                            <Path Data="M3.29381 12.2938C2.45512 12.2938 2.03577 12.2938 1.70498 12.1568C1.26393 11.9741 0.913518 11.6237 0.730827 11.1827C0.593811 10.8518 0.593811 10.4325 0.593811 9.5938V3.4738C0.593811 2.46571 0.593811 1.96165 0.790002 1.57662C0.962568 1.23792 1.23793 0.962555 1.57663 0.789989C1.96167 0.593798 2.46572 0.593798 3.47381 0.593798H9.59381C10.4325 0.593798 10.8518 0.593798 11.1827 0.730814C11.6237 0.913505 11.9741 1.26392 12.1568 1.70496C12.2938 2.03576 12.2938 2.45511 12.2938 3.2938M9.77381 18.5938H15.7138C16.7219 18.5938 17.226 18.5938 17.611 18.3976C17.9497 18.2251 18.2251 17.9497 18.3976 17.611C18.5938 17.226 18.5938 16.7219 18.5938 15.7138V9.7738C18.5938 8.76571 18.5938 8.26162 18.3976 7.8766C18.2251 7.53792 17.9497 7.26255 17.611 7.08999C17.226 6.8938 16.7219 6.8938 15.7138 6.8938H9.77381C8.76572 6.8938 8.26163 6.8938 7.87661 7.08999C7.53793 7.26255 7.26257 7.53792 7.09 7.8766C6.89381 8.26162 6.89381 8.76571 6.89381 9.7738V15.7138C6.89381 16.7219 6.89381 17.226 7.09 17.611C7.26257 17.9497 7.53793 18.2251 7.87661 18.3976C8.26163 18.5938 8.76572 18.5938 9.77381 18.5938Z"
-                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                  StrokeThickness="1.1876"
-                                  StrokeStartLineCap="Round"
-                                  StrokeEndLineCap="Round"
-                                  StrokeLineJoin="Round" />
-                        </Canvas>
+                        <Viewbox Width="17" Height="17">
+                            <Canvas Width="18"
+                                    Height="18">
+                                <Path Data="M3.29381 12.2938C2.45512 12.2938 2.03577 12.2938 1.70498 12.1568C1.26393 11.9741 0.913518 11.6237 0.730827 11.1827C0.593811 10.8518 0.593811 10.4325 0.593811 9.5938V3.4738C0.593811 2.46571 0.593811 1.96165 0.790002 1.57662C0.962568 1.23792 1.23793 0.962555 1.57663 0.789989C1.96167 0.593798 2.46572 0.593798 3.47381 0.593798H9.59381C10.4325 0.593798 10.8518 0.593798 11.1827 0.730814C11.6237 0.913505 11.9741 1.26392 12.1568 1.70496C12.2938 2.03576 12.2938 2.45511 12.2938 3.2938M9.77381 18.5938H15.7138C16.7219 18.5938 17.226 18.5938 17.611 18.3976C17.9497 18.2251 18.2251 17.9497 18.3976 17.611C18.5938 17.226 18.5938 16.7219 18.5938 15.7138V9.7738C18.5938 8.76571 18.5938 8.26162 18.3976 7.8766C18.2251 7.53792 17.9497 7.26255 17.611 7.08999C17.226 6.8938 16.7219 6.8938 15.7138 6.8938H9.77381C8.76572 6.8938 8.26163 6.8938 7.87661 7.08999C7.53793 7.26255 7.26257 7.53792 7.09 7.8766C6.89381 8.26162 6.89381 8.76571 6.89381 9.7738V15.7138C6.89381 16.7219 6.89381 17.226 7.09 17.611C7.26257 17.9497 7.53793 18.2251 7.87661 18.3976C8.26163 18.5938 8.76572 18.5938 9.77381 18.5938Z"
+                                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="1.1876"
+                                      StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round" />
+                            </Canvas>
+                        </Viewbox>
                     </Button>
 
                     <Button x:Name="CopyTranslatedButton"
+                            Grid.Column="2"
                             Width="18"
                             Height="18"
-                            Canvas.Left="92"
-                            Canvas.Top="13"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
                             Click="CopyTranslatedButton_Click"
                             Style="{StaticResource AccentIconButtonStyle}">
                         <Button.ToolTip>
                             <ToolTip Style="{StaticResource ToolbarToolTipStyle}"
                                      Content="Копировать перевод" />
                         </Button.ToolTip>
-                        <Canvas Width="18"
-                                Height="18">
-                            <Path Data="M15.7137 18.5938H8.87357C7.86545 18.5938 7.36135 18.5938 6.97632 18.3976C6.63764 18.2251 6.36224 17.9497 6.1897 17.611C5.9935 17.226 5.9935 16.7219 5.9935 15.7139V8.87404C5.9935 7.86598 5.9935 7.36193 6.1897 6.97691C6.36224 6.63822 6.63764 6.36286 6.97632 6.1903C7.36135 5.99411 7.86545 5.99411 8.87357 5.99411H15.7137C16.7219 5.99411 17.2259 5.99411 17.611 6.1903C17.9497 6.36286 18.225 6.63822 18.3976 6.97691C18.5938 7.36193 18.5938 7.86598 18.5938 8.87404V15.7139C18.5938 16.7219 18.5938 17.226 18.3976 17.611C18.225 17.9497 17.9497 18.2251 17.611 18.3976C17.2259 18.5938 16.7219 18.5938 15.7137 18.5938Z"
-                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                  StrokeThickness="1.1876"
-                                  StrokeStartLineCap="Round"
-                                  StrokeEndLineCap="Round"
-                                  StrokeLineJoin="Round" />
-                            <Path Data="M10.9441 0.596318C11.5516 0.604543 11.9163 0.639723 12.2113 0.789984C12.55 0.962545 12.8253 1.2379 12.9979 1.57659C13.1482 1.8715 13.1834 2.23621 13.1916 2.84374M2.84385 0.596318C2.23625 0.604543 1.87156 0.639723 1.57662 0.789984C1.23794 0.962545 0.962535 1.2379 0.79 1.57659C0.639697 1.8715 0.604504 2.2362 0.596314 2.84373M0.596314 10.9435C0.604504 11.551 0.639697 11.9158 0.79 12.2107C0.962535 12.5494 1.23794 12.8248 1.57662 12.9973C1.87156 13.1476 2.23625 13.1828 2.84385 13.191M0.593795 5.99365V7.79361M7.79388 0.593798H5.99393"
-                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                  StrokeThickness="1.1876"
-                                  StrokeStartLineCap="Round"
-                                  StrokeEndLineCap="Round"
-                                  StrokeLineJoin="Round" />
-                        </Canvas>
+                        <Viewbox Width="17" Height="17">
+                            <Canvas Width="18"
+                                    Height="18">
+                                <Path Data="M15.7137 18.5938H8.87357C7.86545 18.5938 7.36135 18.5938 6.97632 18.3976C6.63764 18.2251 6.36224 17.9497 6.1897 17.611C5.9935 17.226 5.9935 16.7219 5.9935 15.7139V8.87404C5.9935 7.86598 5.9935 7.36193 6.1897 6.97691C6.36224 6.63822 6.63764 6.36286 6.97632 6.1903C7.36135 5.99411 7.86545 5.99411 8.87357 5.99411H15.7137C16.7219 5.99411 17.2259 5.99411 17.611 6.1903C17.9497 6.36286 18.225 6.63822 18.3976 6.97691C18.5938 7.36193 18.5938 7.86598 18.5938 8.87404V15.7139C18.5938 16.7219 18.5938 17.226 18.3976 17.611C18.225 17.9497 17.9497 18.2251 17.611 18.3976C17.2259 18.5938 16.7219 18.5938 15.7137 18.5938Z"
+                                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="1.1876"
+                                      StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round" />
+                                <Path Data="M10.9441 0.596318C11.5516 0.604543 11.9163 0.639723 12.2113 0.789984C12.55 0.962545 12.8253 1.2379 12.9979 1.57659C13.1482 1.8715 13.1834 2.23621 13.1916 2.84374M2.84385 0.596318C2.23625 0.604543 1.87156 0.639723 1.57662 0.789984C1.23794 0.962545 0.962535 1.2379 0.79 1.57659C0.639697 1.8715 0.604504 2.2362 0.596314 2.84373M0.596314 10.9435C0.604504 11.551 0.639697 11.9158 0.79 12.2107C0.962535 12.5494 1.23794 12.8248 1.57662 12.9973C1.87156 13.1476 2.23625 13.1828 2.84385 13.191M0.593795 5.99365V7.79361M7.79388 0.593798H5.99393"
+                                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="1.1876"
+                                      StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round" />
+                            </Canvas>
+                        </Viewbox>
                     </Button>
 
                     <Button x:Name="CloseToolbarButton"
-                            Width="16.334"
-                            Height="16.334"
-                            Canvas.Left="135"
-                            Canvas.Top="13.833"
+                            Grid.Column="3"
+                            Width="18"
+                            Height="18"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
                             Click="CloseToolbarButton_Click"
                             Style="{StaticResource CloseIconButtonStyle}">
                         <Button.ToolTip>
                             <ToolTip Style="{StaticResource ToolbarToolTipStyle}"
                                      Content="Закрыть панель" />
                         </Button.ToolTip>
-                        <Viewbox Width="16" Height="16">
-                            <Canvas Width="16" Height="16">
-                                <Line X1="3"
-                                      Y1="3"
-                                      X2="13"
-                                      Y2="13"
+                        <Viewbox Width="17" Height="17">
+                            <Canvas Width="17" Height="17">
+                                <Line X1="2.5"
+                                      Y1="2.5"
+                                      X2="14.5"
+                                      Y2="14.5"
                                       Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                       StrokeThickness="2.06"
                                       StrokeStartLineCap="Round"
                                       StrokeEndLineCap="Round" />
-                                <Line X1="13"
-                                      Y1="3"
-                                      X2="3"
-                                      Y2="13"
+                                <Line X1="14.5"
+                                      Y1="2.5"
+                                      X2="2.5"
+                                      Y2="14.5"
                                       Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                       StrokeThickness="2.06"
                                       StrokeStartLineCap="Round"
@@ -479,7 +485,7 @@
                             </Canvas>
                         </Viewbox>
                     </Button>
-                </Canvas>
+                </Grid>
             </Grid>
         </Grid>
     </Border>
