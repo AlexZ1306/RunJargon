@@ -851,17 +851,7 @@ public partial class MainWindow : Window
 
         return string.Join(
             Environment.NewLine,
-            segments.Select(segment =>
-            {
-                var prefix = segment.Kind switch
-                {
-                    TextLayoutKind.UiLabel => "[UI]",
-                    TextLayoutKind.Paragraph => "[P]",
-                    _ => "[L]"
-                };
-
-                return $"{prefix} {TextRegionIntelligence.NormalizeWhitespace(segment.Text)}";
-            }));
+            segments.Select(segment => TextRegionIntelligence.NormalizeWhitespace(segment.Text)));
     }
 
     private static bool IsDenseUiRowSegment(

@@ -276,6 +276,7 @@ public sealed class SelectionOverlayHost : IDisposable
             string.Empty,
             string.Empty,
             showToolbar: false);
+        selectionSurface.DragSelectionProgressed += SelectionSurface_DragSelectionProgressed;
         _selectionSurfaceWindow = selectionSurface;
         _currentSelectionTask = selectionSurface.WaitForSelectionAsync();
         _currentSelectionTask.ContinueWith(
@@ -289,6 +290,11 @@ public sealed class SelectionOverlayHost : IDisposable
 
                 dispatcher.Invoke(() =>
                 {
+                    if (_selectionSurfaceWindow is not null)
+                    {
+                        _selectionSurfaceWindow.DragSelectionProgressed -= SelectionSurface_DragSelectionProgressed;
+                    }
+
                     _selectionSurfaceWindow = null;
                     var toolbarWindow = _toolbarWindowTcs.Task.Result;
 
@@ -309,7 +315,9 @@ public sealed class SelectionOverlayHost : IDisposable
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
         selectionSurface.Show();
-        _toolbarWindowTcs.Task.Result.BringToFront();
+        var toolbarWindow = _toolbarWindowTcs.Task.Result;
+        toolbarWindow.BringToFront();
+        toolbarWindow.EnsureTopmostWithoutActivation();
     }
 
     private void ToolbarWindow_LanguageSelectionChanged(object? sender, EventArgs e)
@@ -348,10 +356,26 @@ public sealed class SelectionOverlayHost : IDisposable
                 return;
             }
 
+            _selectionSurfaceWindow.DragSelectionProgressed -= SelectionSurface_DragSelectionProgressed;
             _selectionSurfaceWindow.Close();
             _selectionSurfaceWindow = null;
             _currentSelectionTask = null;
         });
+    }
+
+    private void SelectionSurface_DragSelectionProgressed(object? sender, EventArgs e)
+    {
+        if (_isClosed)
+        {
+            return;
+        }
+
+        if (!_toolbarWindowTcs.Task.IsCompletedSuccessfully)
+        {
+            return;
+        }
+
+        _toolbarWindowTcs.Task.Result.EnsureTopmostWithoutActivation();
     }
 
     private void ToolbarWindow_Closed(object? sender, EventArgs e)

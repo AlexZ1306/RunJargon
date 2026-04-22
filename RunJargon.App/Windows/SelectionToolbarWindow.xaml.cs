@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 using Forms = System.Windows.Forms;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using RunJargon.App.Models;
@@ -101,6 +102,24 @@ public partial class SelectionToolbarWindow : Window
         Topmost = false;
         Topmost = true;
         Activate();
+    }
+
+    public void EnsureTopmostWithoutActivation()
+    {
+        var handle = new WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        NativeMethods.SetWindowPos(
+            handle,
+            NativeMethods.HwndTopmost,
+            0,
+            0,
+            0,
+            0,
+            NativeMethods.SwpNoActivate | NativeMethods.SwpNoMove | NativeMethods.SwpNoSize | NativeMethods.SwpShowWindow);
     }
 
     private void SelectionToolbarWindow_Loaded(object sender, RoutedEventArgs e)

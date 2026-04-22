@@ -80,6 +80,7 @@ public partial class SelectionOverlayWindow : Window
 
     public event EventHandler? LanguageSelectionChanged;
     public event EventHandler? SelectAreaRequested;
+    public event EventHandler? DragSelectionProgressed;
 
     public ScreenRegion? SelectedRegion { get; private set; }
 
@@ -306,6 +307,7 @@ public partial class SelectionOverlayWindow : Window
         SelectionBorder.Visibility = Visibility.Visible;
         Mouse.Capture(RootCanvas);
         UpdateSelection(e.GetPosition(RootCanvas));
+        DragSelectionProgressed?.Invoke(this, EventArgs.Empty);
     }
 
     private void RootCanvas_MouseMove(object sender, MouseEventArgs e)
@@ -316,6 +318,7 @@ public partial class SelectionOverlayWindow : Window
         }
 
         UpdateSelection(e.GetPosition(RootCanvas));
+        DragSelectionProgressed?.Invoke(this, EventArgs.Empty);
     }
 
     private void RootCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
